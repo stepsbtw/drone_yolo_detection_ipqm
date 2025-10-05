@@ -15,7 +15,8 @@ from dotenv import load_dotenv
 load_dotenv()
 
 class WeaponDetector:
-    def __init__(self, model_id: str = "weapon-detection-m7qso/1", confidence_threshold: float = 0.5):
+    #https://universe.roboflow.com/weapon-rcjrw/weapon-detection-pgqnr/model/3
+    def __init__(self, model_id: str = "weapon-detection-pgqnr/3", confidence_threshold: float = 0.2):
         """
         Initialize the weapon detector with Roboflow model.
         
@@ -27,7 +28,7 @@ class WeaponDetector:
         self.confidence_threshold = confidence_threshold
         
         # Set up API key from environment
-        self.api_key = os.getenv('ROBOFLOW_API_KEY') or os.getenv('roboflow')
+        self.api_key = 'AyaEAmTzmir20T8S42Dm' #os.getenv('ROBOFLOW_API_KEY') or os.getenv('roboflow')
         if not self.api_key:
             raise ValueError("ROBOFLOW_API_KEY not found in environment variables (.env file)")
         
@@ -36,7 +37,7 @@ class WeaponDetector:
         
         # Load the model
         try:
-            self.model = get_model(model_id=self.model_id)
+            self.model = get_model(model_id=self.model_id, api_key = self.api_key)
             print(f"Loaded weapon detection model: {self.model_id}")
         except Exception as e:
             raise RuntimeError(f"Failed to load weapon detection model: {e}")
@@ -53,15 +54,12 @@ class WeaponDetector:
         """
         try:
             # Run inference
-            results = self.model.infer(image)[0]
+            results = self.model.infer(image, overlap = 0.50, confidence = self.confidence_threshold)[0]
             
             # Convert to supervision format
             detections = sv.Detections.from_inference(results)
             
-            # Filter by confidence threshold
-            mask = detections.confidence >= self.confidence_threshold
-            detections = detections[mask]
-            
+               
             # Create annotated image
             annotated_image = image.copy()
             
@@ -167,10 +165,10 @@ class WeaponDetector:
             results.append(result)
             
             # Log detection results
-            if result['has_weapons']:
-                weapon_count = len(result['weapon_detections'])
-                print(f"  -> Weapons detected in person crop: {weapon_count} weapon(s)")
-            else:
-                print(f"  -> No weapons detected in person crop")
+            # if result['has_weapons']:
+            #     weapon_count = len(result['weapon_detections'])
+            #     print(f"  -> Weapons detected in person crop: {weapon_count} weapon(s)")
+            # else:
+            #     print(f"  -> No weapons detected in person crop")
         
         return results

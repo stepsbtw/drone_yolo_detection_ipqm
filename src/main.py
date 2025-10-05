@@ -19,7 +19,9 @@ def main():
     parser = argparse.ArgumentParser(description='Detect people in images using YOLOv11')
     parser.add_argument('--model', default='models/yolo11n.pt', 
                        help='Path to YOLO model file')
-    parser.add_argument('--input', default='inputs/samples', 
+    parser.add_argument('--input_with_weapons', default='inputs_with_weapons/samples', 
+                       help='Input directory containing sample folders')
+    parser.add_argument('--input_without_weapons', default='inputs_without_weapons/samples', 
                        help='Input directory containing sample folders')
     parser.add_argument('--output', default='output/detections', 
                        help='Output directory for processed images')
@@ -45,9 +47,14 @@ def main():
         print(f"Error: Model file not found: {args.model}")
         return 1
         
-    if not os.path.exists(args.input):
-        print(f"Error: Input directory not found: {args.input}")
+    if not os.path.exists(args.input_with_weapons):
+        print(f"Error: Input directory not found: {args.input_with_weapons}")
         return 1
+    
+    if not os.path.exists(args.input_without_weapons):
+        print(f"Error: Input directory not found: {args.input_without_weapons}")
+        return 1
+    
     
     # Create output directory
     Path(args.output).mkdir(parents=True, exist_ok=True)
@@ -60,30 +67,23 @@ def main():
     detector.save_crops = save_crops
     
     # Process all sample directories
-    print(f"Processing samples from: {args.input}")
+    print(f"Processing samples from: {args.input_with_weapons}")
+    print(f"Processing samples from: {args.input_without_weapons}")
     print(f"Output will be saved to: {args.output}")
     print(f"Crop saving: {'Enabled' if save_crops else 'Disabled'}")
     print(f"Weapon detection: {'Enabled' if enable_weapons and detector.enable_weapon_detection else 'Disabled'}")
     
     # Check if input is a single directory with images or a parent directory with subdirectories
-    if os.path.isdir(args.input):
+    if os.path.isdir(args.input_with_weapons) and os.path.isdir(args.input_without_weapons):
         # Check if input directory contains image files directly
-        image_files = []
-        for ext in ['.jpg', '.jpeg', '.png', '.bmp']:
-            image_files.extend(glob.glob(os.path.join(args.input, f"*{ext}")))
-            image_files.extend(glob.glob(os.path.join(args.input, f"*{ext.upper()}")))
-        
-        if image_files:
-            # Input directory contains images directly - process as single directory
-            print(f"Processing single directory with {len(image_files)} images")
-            detector.process_directory(args.input, args.output)
-        else:
-            # Input directory contains subdirectories - process all subdirectories
-            detector.process_all_sample_directories(args.input, args.output)
+        detector.process_all_sample_directories(args.input_with_weapons, args.output, True)
+        #detector.process_all_sample_directories(args.input_without_weapons, args.output, False)
     else:
-        print(f"Error: Input path does not exist: {args.input}")
+        print(f"Error: Input path does not exist: {args.input_with_weapons} or {args.input_without_weapons}")
         return 1
-    
+
+    # Print comprehensive statistics
+    detector.stats.print_summary()
     print("\nProcessing complete!")
     return 0
 

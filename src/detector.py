@@ -45,6 +45,14 @@ class DetectionStatistics:
         self.total_samples = 0
         self.samples_with_weapons = 0
         self.current_sample_has_weapons = False
+        self.tp = 0
+        self.tn = 0
+        self.fp = 0
+        self.fn = 0
+        self.accuracy = 0
+        self.prec= 0
+        self.recall = 0
+        self.f1score = 0
     
     def start_new_sample(self):
         """Mark the start of a new sample directory."""
@@ -53,18 +61,28 @@ class DetectionStatistics:
         self.current_sample_has_weapons = False
         self.total_samples += 1
     
-    def add_image_results(self, num_people, num_weapons, people_with_weapons_count):
+    def add_image_results(self, num_people, num_weapons, people_with_weapons_count, with_weapons):
         """Add results from processing one image."""
+
         self.total_images += 1
         if num_people > 0:
             self.images_with_people += 1
         
-        self.total_people += num_people
-        self.total_weapons += num_weapons
-        self.people_with_weapons += people_with_weapons_count
-        
-        if num_weapons > 0:
-            self.current_sample_has_weapons = True
+            self.total_people += 1#num_people
+            self.total_weapons += num_weapons
+            self.people_with_weapons += people_with_weapons_count
+            if num_weapons > 0:
+
+                self.current_sample_has_weapons = True
+                if with_weapons is True:
+                    self.tp +=1
+                else:
+                    self.fp +=1
+            else:
+                if with_weapons is True:
+                    self.fn +=1
+                else:
+                    self.tn +=1
     
     def finalize(self):
         """Finalize statistics (call at the end)."""
@@ -82,6 +100,11 @@ class DetectionStatistics:
         # Percentage of samples with weapons
         weapons_in_samples_pct = (self.samples_with_weapons / self.total_samples * 100) if self.total_samples > 0 else 0
         
+        self.accuracy = (self.tp + self.tn) / (self.tp + self.tn + self.fp + self.fn)
+        self.precision = (self.tp) / (self.tp + self.fp)  
+        self.recall = (self.tp) / (self.tp + self.fn)  
+        self.f1score = 2 * ((self.precision * self.recall) / (self.precision + self.recall))  
+
         return {
             'people_in_images_pct': people_in_images_pct,
             'weapons_in_people_pct': weapons_in_people_pct,
@@ -92,7 +115,15 @@ class DetectionStatistics:
             'total_weapons': self.total_weapons,
             'people_with_weapons': self.people_with_weapons,
             'total_samples': self.total_samples,
-            'samples_with_weapons': self.samples_with_weapons
+            'samples_with_weapons': self.samples_with_weapons,
+            'accuracy':self.accuracy,
+            'precision':self.precision,
+            'recall':self.recall,
+            'f1score':self.f1score,
+            'tp':self.tp,
+            'tn':self.tn,
+            'fp':self.fp,
+            'fn':self.fn
         }
     
     def print_summary(self):
@@ -123,6 +154,15 @@ class DetectionStatistics:
         print(f"   ⚔️  Weapons in people: {stats['weapons_in_people_pct']:.1f}% of people have weapons")
         print(f"   📁 Weapons in samples: {stats['weapons_in_samples_pct']:.1f}% of samples contain weapons")
         
+        print(f'\nAccuracy: {stats['accuracy']}')
+        print(f'\nPrecision: {stats['precision']}')
+        print(f'\nRecall: {stats['recall']}')
+        print(f'\nF1-Score: {stats['f1score']}')
+        print(f'\nTP: {stats['tp']}')
+        print(f'\nTN: {stats['tn']}')
+        print(f'\nFP: {stats['fp']}')
+        print(f'\nFN: {stats['fn']}')
+
         if stats['total_weapons'] > 0:
             avg_weapons_per_person = stats['total_weapons'] / stats['people_with_weapons']
             print(f"   📊 Average weapons per armed person: {avg_weapons_per_person:.1f}")
@@ -131,7 +171,7 @@ class DetectionStatistics:
 
 
 class PeopleDetector:
-    def __init__(self, model_path: str, confidence_threshold: float = 0.5, enable_weapon_detection: bool = True):
+    def __init__(self, model_path: str, confidence_threshold: float = 0.4, enable_weapon_detection: bool = True):
         """
         Initialize the people detector with YOLOv11 model.
         
@@ -182,7 +222,8 @@ class PeopleDetector:
             raise ValueError(f"Could not load image: {image_path}")
             
         # Run inference
-        results = self.model(image)
+        results = self.model(image, imgsz=640, iou=0.6, conf = self.confidence_threshold, verbose=False)
+        
         
         # Process results
         detections_info = []
@@ -196,6 +237,10 @@ class PeopleDetector:
                     x1, y1, x2, y2 = box.xyxy[0].cpu().numpy()
                     confidence = box.conf[0].cpu().numpy()
                     class_id = int(box.cls[0].cpu().numpy())
+
+                    real_height = 1700
+                    pixel_height = y1 + y2
+                    focal_length = 0
                     
                     # Only process person detections above threshold
                     if class_id == self.person_class_id and confidence >= self.confidence_threshold:
@@ -264,8 +309,8 @@ class PeopleDetector:
             except NameError:
                 min_size = 32  # Default fallback
                 
-            if crop_width < min_size or crop_height < min_size:
-                continue  # Skip crops that are too small
+            #if crop_width < min_size or crop_height < min_size:
+            #    continue  # Skip crops that are too small
             
             # Crop the image
             cropped_person = image[y1_pad:y2_pad, x1_pad:x2_pad]
@@ -278,7 +323,6 @@ class PeopleDetector:
                 'confidence': confidence,
                 'crop_size': (crop_width, crop_height)
             }
-            
             crops.append((cropped_person, crop_info))
         
         return crops
@@ -402,7 +446,7 @@ class PeopleDetector:
         
         return saved_crops
     
-    def process_directory(self, input_dir: str, output_dir: str):
+    def process_directory(self, input_dir: str, output_dir: str, with_weapons : False):
         """
         Process all images in a directory and save results.
         
@@ -420,16 +464,16 @@ class PeopleDetector:
         
         # Get all image files
         image_files = []
-        for ext in SUPPORTED_FORMATS:
-            image_files.extend(glob.glob(os.path.join(input_dir, f"*{ext}")))
-            image_files.extend(glob.glob(os.path.join(input_dir, f"*{ext.upper()}")))
+        for file in os.listdir(input_dir):
+            if os.path.splitext(file)[1].lower() in [ext.lower() for ext in SUPPORTED_FORMATS]:
+                image_files.append(os.path.join(input_dir, file))
         
         print(f"Found {len(image_files)} images in {input_dir}")
         
         # Process each image
         for i, image_path in enumerate(image_files):
             try:
-                print(f"Processing {i+1}/{len(image_files)}: {os.path.basename(image_path)}")
+                #print(f"Processing {i+1}/{len(image_files)}: {os.path.basename(image_path)}")
                 
                 # Load original image for cropping
                 original_image = cv2.imread(image_path)
@@ -461,12 +505,12 @@ class PeopleDetector:
                     
                     # Perform weapon detection on person crops
                     if self.enable_weapon_detection and person_crops:
-                        print(f"  -> Checking {len(person_crops)} person crops for weapons...")
+                        #print(f"  -> Checking {len(person_crops)} person crops for weapons...")
                         weapon_results = self.detect_weapons_in_crops(person_crops)
                         weapons_detected, people_with_weapons_count = self.save_weapon_detection_results(weapon_results, output_dir, name)
                 
                 # Update statistics
-                self.stats.add_image_results(len(detections), weapons_detected, people_with_weapons_count)
+                self.stats.add_image_results(len(detections), weapons_detected, people_with_weapons_count, with_weapons)
                 
                 # Print detection summary
                 if detections:
@@ -477,7 +521,7 @@ class PeopleDetector:
                         summary_parts.append(f"detected {weapons_detected} weapons")
                         if people_with_weapons_count > 0:
                             summary_parts.append(f"({people_with_weapons_count} people with weapons)")
-                    print(f"  -> {', '.join(summary_parts)}")
+                    #print(f"  -> {', '.join(summary_parts)}")
                 else:
                     print(f"  -> No people detected, saved full image only")
                     
@@ -495,7 +539,7 @@ class PeopleDetector:
                 if stats['total_people'] > 0:
                     print(f"Weapon rate: {stats['weapons_in_people_pct']:.1f}% of people have weapons")
     
-    def process_all_sample_directories(self, samples_dir: str, output_base_dir: str):
+    def process_all_sample_directories(self, samples_dir: str, output_base_dir: str, with_weapons):
         """
         Process all sample directories and maintain organized folder structure.
         
@@ -514,7 +558,7 @@ class PeopleDetector:
         crops_base_dir = os.path.join(output_base_dir, "crops")
         
         # Reset statistics for batch processing
-        self.stats.reset()
+        #self.stats.reset()
         self.stats._in_batch_mode = True  # Flag to indicate batch processing
         
         for sample_idx, sample_dir in enumerate(sample_dirs, 1):
@@ -527,58 +571,85 @@ class PeopleDetector:
             # Create temporary output structure for this sample
             temp_output = os.path.join(output_base_dir, "temp", sample_dir)
             
-            print(f"\\nProcessing sample {sample_idx}/{len(sample_dirs)}: {sample_dir}")
+            print(f"\n Processing sample {sample_idx}/{len(sample_dirs)}: {sample_dir}")
             
             # Mark start of new sample for statistics
             self.stats.start_new_sample()
             
-            self.process_directory(input_path, temp_output)
+            self.process_directory(input_path, temp_output, with_weapons)
             
             # Move results to organized structure
             self._organize_sample_output(temp_output, sample_detections_dir, sample_crops_dir)
         
         # Finalize statistics
-        self.stats.finalize()
+        #self.stats.finalize()
         
         # Clean up empty weapon detection directories
         self._cleanup_empty_weapon_directories(output_base_dir)
-        
-        # Print comprehensive statistics
-        self.stats.print_summary()
+   
     
+        
+
+
     def _organize_sample_output(self, temp_dir: str, detections_dir: str, crops_dir: str):
+        import os    
+        import shutil
+        from pathlib import Path
+        import stat
+        
         """
         Move processed files from temp directory to organized structure.
+        Handles Windows permission issues.
         """
-        import shutil
-        
+
+        def on_rm_error(func, path, exc_info):
+            """Force delete read-only files (Windows quirk)."""
+            os.chmod(path, stat.S_IWRITE)
+            func(path)
+
         temp_detections = os.path.join(temp_dir, "detections")
         temp_crops = os.path.join(temp_dir, "crops")
         temp_weapons = os.path.join(temp_dir, "weapon_detections")
-        
+
         # Move detections
         if os.path.exists(temp_detections):
             Path(detections_dir).mkdir(parents=True, exist_ok=True)
             for file in os.listdir(temp_detections):
-                shutil.move(os.path.join(temp_detections, file), os.path.join(detections_dir, file))
-        
+                src = os.path.join(temp_detections, file)
+                dst = os.path.join(detections_dir, file)
+                if os.path.exists(dst):
+                    os.remove(dst)
+                shutil.move(src, dst)
+
         # Move crops
-        if os.path.exists(temp_crops) and self.save_crops:
+        if os.path.exists(temp_crops) and getattr(self, "save_crops", True):
             Path(crops_dir).mkdir(parents=True, exist_ok=True)
             for file in os.listdir(temp_crops):
-                shutil.move(os.path.join(temp_crops, file), os.path.join(crops_dir, file))
-        
+                src = os.path.join(temp_crops, file)
+                dst = os.path.join(crops_dir, file)
+                if os.path.exists(dst):
+                    os.remove(dst)
+                shutil.move(src, dst)
+
         # Move weapon detections
         if os.path.exists(temp_weapons):
-            weapons_base_dir = os.path.dirname(crops_dir).replace("/crops", "/weapon_detections")
+            weapons_base_dir = os.path.dirname(crops_dir).replace("\\crops", "\\weapon_detections").replace("/crops", "/weapon_detections")
             weapons_dir = os.path.join(weapons_base_dir, os.path.basename(crops_dir))
             Path(weapons_dir).mkdir(parents=True, exist_ok=True)
             for file in os.listdir(temp_weapons):
-                shutil.move(os.path.join(temp_weapons, file), os.path.join(weapons_dir, file))
-        
-        # Clean up temp directory
+                src = os.path.join(temp_weapons, file)
+                dst = os.path.join(weapons_dir, file)
+                if os.path.exists(dst):
+                    os.remove(dst)
+                shutil.move(src, dst)
+
+        # Clean up temp directory (safe version)
         if os.path.exists(temp_dir):
-            shutil.rmtree(temp_dir)
+            try:
+                shutil.rmtree(temp_dir, onerror=on_rm_error)
+            except PermissionError:
+                print(f"[WARNING] Could not remove {temp_dir} due to permission issues.")
+
     
     def _cleanup_empty_weapon_directories(self, output_base_dir: str):
         """

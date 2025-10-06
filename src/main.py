@@ -19,10 +19,12 @@ def main():
     parser = argparse.ArgumentParser(description='Detect people in images using YOLOv11')
     parser.add_argument('--model', default='models/yolo11n.pt', 
                        help='Path to YOLO model file')
-    parser.add_argument('--input_with_weapons', default='inputs_with_weapons/samples', 
+    parser.add_argument('--input', default='inputs/samples', 
                        help='Input directory containing sample folders')
-    parser.add_argument('--input_without_weapons', default='inputs_without_weapons/samples', 
-                       help='Input directory containing sample folders')
+    parser.add_argument('--input_with_weapons', default=None, 
+                       help='Input directory containing sample folders with weapons (optional)')
+    parser.add_argument('--input_without_weapons', default=None, 
+                       help='Input directory containing sample folders without weapons (optional)')
     parser.add_argument('--output', default='output/detections', 
                        help='Output directory for processed images')
     parser.add_argument('--confidence', type=float, default=0.5,
@@ -46,13 +48,20 @@ def main():
     if not os.path.exists(args.model):
         print(f"Error: Model file not found: {args.model}")
         return 1
-        
-    if not os.path.exists(args.input_with_weapons):
-        print(f"Error: Input directory not found: {args.input_with_weapons}")
-        return 1
     
-    if not os.path.exists(args.input_without_weapons):
-        print(f"Error: Input directory not found: {args.input_without_weapons}")
+    # Determine input source
+    input_dir = args.input
+    with_weapons = False  # Default assumption
+    
+    # If specific weapon/no-weapon directories are provided, use them
+    if args.input_with_weapons and os.path.exists(args.input_with_weapons):
+        input_dir = args.input_with_weapons
+        with_weapons = True
+    elif args.input_without_weapons and os.path.exists(args.input_without_weapons):
+        input_dir = args.input_without_weapons
+        with_weapons = False
+    elif not os.path.exists(input_dir):
+        print(f"Error: Input directory not found: {input_dir}")
         return 1
     
     
@@ -67,19 +76,27 @@ def main():
     detector.save_crops = save_crops
     
     # Process all sample directories
-    print(f"Processing samples from: {args.input_with_weapons}")
-    print(f"Processing samples from: {args.input_without_weapons}")
+    print(f"Processing samples from: {input_dir}")
     print(f"Output will be saved to: {args.output}")
     print(f"Crop saving: {'Enabled' if save_crops else 'Disabled'}")
     print(f"Weapon detection: {'Enabled' if enable_weapons and detector.enable_weapon_detection else 'Disabled'}")
+    print(f"Sample type: {'With weapons' if with_weapons else 'Without weapons'}")
     
     # Check if input is a single directory with images or a parent directory with subdirectories
-    if os.path.isdir(args.input_with_weapons) and os.path.isdir(args.input_without_weapons):
-        # Check if input directory contains image files directly
-        detector.process_all_sample_directories(args.input_with_weapons, args.output, True)
-        #detector.process_all_sample_directories(args.input_without_weapons, args.output, False)
+    if os.path.isdir(input_dir):
+        # Check if it's a single directory with images or contains subdirectories
+        image_files = [f for f in os.listdir(input_dir) 
+                      if os.path.splitext(f)[1].lower() in ['.jpg', '.jpeg', '.png', '.bmp']]
+        
+        if image_files:
+            # Direct directory with images
+            print(f"Processing single directory with {len(image_files)} images")
+            detector.process_directory(input_dir, args.output, with_weapons)
+        else:
+            # Directory with subdirectories
+            detector.process_all_sample_directories(input_dir, args.output, with_weapons)
     else:
-        print(f"Error: Input path does not exist: {args.input_with_weapons} or {args.input_without_weapons}")
+        print(f"Error: Input path does not exist: {input_dir}")
         return 1
 
     # Print comprehensive statistics

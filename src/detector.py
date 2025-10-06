@@ -7,8 +7,10 @@ import cv2
 import os
 import glob
 import numpy as np
+import logging
 from pathlib import Path
 from ultralytics import YOLO
+from estimation import Camera
 
 try:
     from config import *
@@ -53,6 +55,9 @@ class DetectionStatistics:
         self.prec= 0
         self.recall = 0
         self.f1score = 0
+        # Distance tracking
+        self.distances = []
+        self.people_with_distance = 0
     
     def start_new_sample(self):
         """Mark the start of a new sample directory."""
@@ -61,28 +66,36 @@ class DetectionStatistics:
         self.current_sample_has_weapons = False
         self.total_samples += 1
     
-    def add_image_results(self, num_people, num_weapons, people_with_weapons_count, with_weapons):
+    def add_image_results(self, num_people, num_weapons, people_with_weapons_count, with_weapons, distances=None):
         """Add results from processing one image."""
 
         self.total_images += 1
         if num_people > 0:
             self.images_with_people += 1
         
-            self.total_people += 1#num_people
-            self.total_weapons += num_weapons
-            self.people_with_weapons += people_with_weapons_count
-            if num_weapons > 0:
-
-                self.current_sample_has_weapons = True
-                if with_weapons is True:
-                    self.tp +=1
-                else:
-                    self.fp +=1
+        self.total_people += num_people
+        self.total_weapons += num_weapons
+        self.people_with_weapons += people_with_weapons_count
+        
+        if num_weapons > 0:
+            self.current_sample_has_weapons = True
+            if with_weapons is True:
+                self.tp += 1
             else:
-                if with_weapons is True:
-                    self.fn +=1
-                else:
-                    self.tn +=1
+                self.fp += 1
+        else:
+            if with_weapons is True:
+                self.fn += 1
+            else:
+                self.tn += 1
+        
+        # Add distance information
+        if distances:
+            self.distances.extend(distances)
+            self.people_with_distance += len(distances)
+        
+        if num_weapons > 0:
+            self.current_sample_has_weapons = True
     
     def finalize(self):
         """Finalize statistics (call at the end)."""
@@ -100,11 +113,31 @@ class DetectionStatistics:
         # Percentage of samples with weapons
         weapons_in_samples_pct = (self.samples_with_weapons / self.total_samples * 100) if self.total_samples > 0 else 0
         
-        self.accuracy = (self.tp + self.tn) / (self.tp + self.tn + self.fp + self.fn)
-        self.precision = (self.tp) / (self.tp + self.fp)  
-        self.recall = (self.tp) / (self.tp + self.fn)  
-        self.f1score = 2 * ((self.precision * self.recall) / (self.precision + self.recall))  
+        # Calculate metrics with zero division protection
+        total_predictions = self.tp + self.tn + self.fp + self.fn
+        if total_predictions > 0:
+            self.accuracy = (self.tp + self.tn) / total_predictions
+        else:
+            self.accuracy = 0
+            
+        if (self.tp + self.fp) > 0:
+            self.precision = self.tp / (self.tp + self.fp)
+        else:
+            self.precision = 0
+            
+        if (self.tp + self.fn) > 0:
+            self.recall = self.tp / (self.tp + self.fn)
+        else:
+            self.recall = 0
+            
+        if (self.precision + self.recall) > 0:
+            self.f1score = 2 * ((self.precision * self.recall) / (self.precision + self.recall))
+        else:
+            self.f1score = 0  
 
+        
+        avg_distance = np.mean(self.distances) if self.distances else 0
+        
         return {
             'people_in_images_pct': people_in_images_pct,
             'weapons_in_people_pct': weapons_in_people_pct,
@@ -123,7 +156,11 @@ class DetectionStatistics:
             'tp':self.tp,
             'tn':self.tn,
             'fp':self.fp,
-            'fn':self.fn
+            'fn':self.fn,
+            
+            'people_with_distance': self.people_with_distance,
+            'avg_distance': avg_distance,
+            'total_distances': len(self.distances)
         }
     
     def print_summary(self):
@@ -149,7 +186,13 @@ class DetectionStatistics:
         print(f"   Total samples processed: {stats['total_samples']:,}")
         print(f"   Samples with weapons: {stats['samples_with_weapons']:,} ({stats['weapons_in_samples_pct']:.1f}%)")
         
-        print(f"\\n📈 KEY PERCENTAGES:")
+        if stats['total_distances'] > 0:
+            print(f"   People with distance data: {stats['people_with_distance']:,}")
+            print(f"   Average distance: {stats['avg_distance']:.2f}m")
+        else:
+            print(f"   No distance data available")
+        
+        print(f"\\n�� KEY PERCENTAGES:")
         print(f"   🎯 People in images: {stats['people_in_images_pct']:.1f}% of images contain people")
         print(f"   ⚔️  Weapons in people: {stats['weapons_in_people_pct']:.1f}% of people have weapons")
         print(f"   📁 Weapons in samples: {stats['weapons_in_samples_pct']:.1f}% of samples contain weapons")
@@ -205,6 +248,59 @@ class PeopleDetector:
                 print("Weapon detection requested but not available")
             else:
                 print("Weapon detection disabled")
+        self.camera = None
+        
+        try:
+            self.camera = Camera()  # Using default drone camera settings
+            self.distance_logger = logging.getLogger('distance_logger')
+            self.distance_logger.setLevel(logging.INFO)
+            
+            if not self.distance_logger.handlers:
+                log_file = 'person_distances.log'
+                file_handler = logging.FileHandler(log_file)
+                file_handler.setLevel(logging.INFO)
+                formatter = logging.Formatter('%(asctime)s - %(message)s')
+                file_handler.setFormatter(formatter)
+                self.distance_logger.addHandler(file_handler)
+            
+        except Exception as e:
+            print(f"Failed to initialize distance estimation: {e}")
+    
+    def extract_real_distance_from_filename(self, filepath: str):
+        try:
+            dir_path = os.path.dirname(filepath)
+            dir_name = os.path.basename(dir_path)
+            
+            if not dir_name:
+                dir_name = os.path.splitext(os.path.basename(filepath))[0]
+            parts = dir_name.split('_')
+
+            for i in range(len(parts) - 1):
+                if parts[i + 1].isdigit() and i + 2 < len(parts) and parts[i + 2].isdigit():
+                    distance = float(parts[i + 1])
+                    return distance
+            
+            return None
+        except (ValueError, IndexError):
+            return None
+        
+    def extract_camera_height_from_filename(self, filepath: str):
+        try:
+            dir_path = os.path.dirname(filepath)
+            dir_name = os.path.basename(dir_path)
+
+            if not dir_name:
+                dir_name = os.path.splitext(os.path.basename(filepath))[0]
+            parts = dir_name.split('_')
+
+            for i in range(len(parts) - 1):
+                if parts[i + 1].isdigit() and i + 2 < len(parts) and parts[i + 2].isdigit():
+                    height = float(parts[i + 2])
+                    return height
+            
+            return None
+        except (ValueError, IndexError):
+            return None
         
     def detect_people(self, image_path: str):
         """
@@ -232,18 +328,44 @@ class PeopleDetector:
         for result in results:
             boxes = result.boxes
             if boxes is not None:
-                for box in boxes:
+                for person_idx, box in enumerate(boxes):
                     # Get box coordinates and confidence
                     x1, y1, x2, y2 = box.xyxy[0].cpu().numpy()
                     confidence = box.conf[0].cpu().numpy()
                     class_id = int(box.cls[0].cpu().numpy())
-
-                    real_height = 1700
-                    pixel_height = y1 + y2
-                    focal_length = 0
                     
                     # Only process person detections above threshold
                     if class_id == self.person_class_id and confidence >= self.confidence_threshold:
+                        # height pixels
+                        person_height_px = y2 - y1
+                        
+                        distance_m = None
+                        if self.camera:
+                            try:
+                                distance_m = self.camera.estimate_distance(person_height_px)
+                                
+                                # Extract real distance and camera height from file path
+                                image_name = os.path.basename(image_path)
+                                real_distance_m = self.extract_real_distance_from_filename(image_path)
+                                
+                                log_message = (f"Image: {image_name}, Person: {person_idx + 1}, "
+                                             f"PixelHeight: {person_height_px:.1f}px, "
+                                             f"Estimated: {distance_m:.2f}m, "
+                                             f"Real: {real_distance_m:.2f}m, " if real_distance_m else f"Real: N/A, "
+                                             f"Confidence: {confidence:.3f}, "
+                                             f"BBox: [{int(x1)}, {int(y1)}, {int(x2)}, {int(y2)}]")
+                                self.distance_logger.info(log_message)
+                                
+                                # Enhanced console output
+                                console_msg = f"  -> Person {person_idx + 1}: Est:{distance_m:.2f}m"
+                                if real_distance_m is not None:
+                                    console_msg += f", Real:{real_distance_m:.2f}m)"
+                                console_msg += f", {person_height_px:.1f}px"
+                                print(console_msg)
+                                
+                            except Exception as e:
+                                print(f"Warning: Failed to estimate distance for person {person_idx + 1}: {e}")
+                        
                         # Draw bounding box
                         cv2.rectangle(image_with_boxes, 
                                     (int(x1), int(y1)), 
@@ -252,17 +374,27 @@ class PeopleDetector:
                         
                         # Add confidence label
                         label = f"Person: {confidence:.2f}"
+                        if distance_m is not None:
+                            label += f" ({distance_m:.1f}m)"
+                        
                         cv2.putText(image_with_boxes, label, 
                                   (int(x1), int(y1) - 10), 
                                   cv2.FONT_HERSHEY_SIMPLEX, FONT_SCALE, 
                                   BOX_COLOR, FONT_THICKNESS)
                         
                         # Store detection info
-                        detections_info.append({
+                        detection_info = {
                             'bbox': [int(x1), int(y1), int(x2), int(y2)],
                             'confidence': float(confidence),
-                            'class': 'person'
-                        })
+                            'class': 'person',
+                            'height_px': float(person_height_px)
+                        }
+                        
+                        # Add distance if available
+                        if distance_m is not None:
+                            detection_info['distance_m'] = float(distance_m)
+                        
+                        detections_info.append(detection_info)
         
         return image_with_boxes, detections_info
     
@@ -446,7 +578,7 @@ class PeopleDetector:
         
         return saved_crops
     
-    def process_directory(self, input_dir: str, output_dir: str, with_weapons : False):
+    def process_directory(self, input_dir: str, output_dir: str, with_weapons=False):
         """
         Process all images in a directory and save results.
         
@@ -509,8 +641,11 @@ class PeopleDetector:
                         weapon_results = self.detect_weapons_in_crops(person_crops)
                         weapons_detected, people_with_weapons_count = self.save_weapon_detection_results(weapon_results, output_dir, name)
                 
+                # Extract distances from detections
+                distances = [d['distance_m'] for d in detections if 'distance_m' in d]
+                
                 # Update statistics
-                self.stats.add_image_results(len(detections), weapons_detected, people_with_weapons_count, with_weapons)
+                self.stats.add_image_results(len(detections), weapons_detected, people_with_weapons_count, with_weapons, distances)
                 
                 # Print detection summary
                 if detections:
@@ -538,6 +673,9 @@ class PeopleDetector:
                 print(f"Weapons detected: {stats['total_weapons']}")
                 if stats['total_people'] > 0:
                     print(f"Weapon rate: {stats['weapons_in_people_pct']:.1f}% of people have weapons")
+            if stats['total_distances'] > 0:
+                print(f"Distance measurements: {stats['total_distances']}")
+                print(f"Average distance: {stats['avg_distance']:.2f}m")
     
     def process_all_sample_directories(self, samples_dir: str, output_base_dir: str, with_weapons):
         """

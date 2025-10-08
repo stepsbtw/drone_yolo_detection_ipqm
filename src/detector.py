@@ -26,9 +26,9 @@ except ImportError:
 try:
     from weapon_detector import WeaponDetector
     WEAPON_DETECTION_AVAILABLE = True
-except ImportError:
+except ImportError as e:
     WEAPON_DETECTION_AVAILABLE = False
-    print("Warning: Weapon detection not available. Install required packages: pip install inference supervision python-dotenv")
+    print(f"Warning: Weapon detection not available. Error: {e}")
 
 
 class DetectionStatistics:
@@ -47,6 +47,20 @@ class DetectionStatistics:
         self.total_samples = 0
         self.samples_with_weapons = 0
         self.current_sample_has_weapons = False
+        
+        # Per-frame metrics
+        self.tp_frame = 0
+        self.tn_frame = 0
+        self.fp_frame = 0
+        self.fn_frame = 0
+        
+        # Per-sample metrics
+        self.tp_sample = 0
+        self.tn_sample = 0
+        self.fp_sample = 0
+        self.fn_sample = 0
+        
+        # Legacy single metrics (will be same as frame metrics)
         self.tp = 0
         self.tn = 0
         self.fp = 0
@@ -55,18 +69,49 @@ class DetectionStatistics:
         self.prec= 0
         self.recall = 0
         self.f1score = 0
+        
         # Distance tracking
         self.distances = []
         self.people_with_distance = 0
+        
+        # Sample tracking
+        self.current_sample_ground_truth = False
+        self.current_sample_detected_weapons = False
     
-    def start_new_sample(self):
+    def start_new_sample(self, sample_ground_truth=False):
         """Mark the start of a new sample directory."""
-        if self.current_sample_has_weapons:
-            self.samples_with_weapons += 1
+        # Finalize previous sample if this isn't the first one
+        if hasattr(self, 'current_sample_ground_truth'):
+            self.finalize_current_sample()
+        
+        # Initialize new sample
+        self.current_sample_ground_truth = sample_ground_truth
+        self.current_sample_detected_weapons = False
         self.current_sample_has_weapons = False
         self.total_samples += 1
     
-    def add_image_results(self, num_people, num_weapons, people_with_weapons_count, with_weapons, distances=None):
+    def finalize_current_sample(self):
+        """Finalize the current sample and update sample-level metrics."""
+        if not hasattr(self, 'current_sample_ground_truth'):
+            return
+            
+        # Update sample count
+        if self.current_sample_has_weapons:
+            self.samples_with_weapons += 1
+        
+        # Update sample-level confusion matrix
+        if self.current_sample_detected_weapons:  # Weapons detected in sample
+            if self.current_sample_ground_truth:  # Ground truth: should have weapons
+                self.tp_sample += 1  # True Positive
+            else:  # Ground truth: should not have weapons
+                self.fp_sample += 1  # False Positive
+        else:  # No weapons detected in sample
+            if self.current_sample_ground_truth:  # Ground truth: should have weapons
+                self.fn_sample += 1  # False Negative
+            else:  # Ground truth: should not have weapons
+                self.tn_sample += 1  # True Negative
+    
+    def add_image_results(self, num_people, num_weapons, people_with_weapons_count, has_weapons_ground_truth, distances=None):
         """Add results from processing one image."""
 
         self.total_images += 1
@@ -77,30 +122,64 @@ class DetectionStatistics:
         self.total_weapons += num_weapons
         self.people_with_weapons += people_with_weapons_count
         
+        # Track sample-level detection
         if num_weapons > 0:
             self.current_sample_has_weapons = True
-            if with_weapons is True:
-                self.tp += 1
-            else:
-                self.fp += 1
-        else:
-            if with_weapons is True:
-                self.fn += 1
-            else:
-                self.tn += 1
+            self.current_sample_detected_weapons = True
+        
+        # Calculate per-frame metrics
+        if num_weapons > 0:  # Weapons detected in frame
+            if has_weapons_ground_truth:  # Ground truth: should have weapons
+                self.tp_frame += 1  # True Positive
+            else:  # Ground truth: should not have weapons
+                self.fp_frame += 1  # False Positive
+        else:  # No weapons detected in frame
+            if has_weapons_ground_truth:  # Ground truth: should have weapons
+                self.fn_frame += 1  # False Negative
+            else:  # Ground truth: should not have weapons
+                self.tn_frame += 1  # True Negative
+        
+        # Update legacy metrics (same as frame metrics for backward compatibility)
+        self.tp = self.tp_frame
+        self.tn = self.tn_frame
+        self.fp = self.fp_frame
+        self.fn = self.fn_frame
         
         # Add distance information
         if distances:
             self.distances.extend(distances)
             self.people_with_distance += len(distances)
-        
-        if num_weapons > 0:
-            self.current_sample_has_weapons = True
     
     def finalize(self):
         """Finalize statistics (call at the end)."""
-        if self.current_sample_has_weapons:
-            self.samples_with_weapons += 1
+        # Finalize the last sample
+        self.finalize_current_sample()
+    
+    def calculate_metrics(self, tp, tn, fp, fn):
+        """Calculate accuracy, precision, recall, and F1-score from confusion matrix."""
+        total_predictions = tp + tn + fp + fn
+        
+        if total_predictions > 0:
+            accuracy = (tp + tn) / total_predictions
+        else:
+            accuracy = 0
+            
+        if (tp + fp) > 0:
+            precision = tp / (tp + fp)
+        else:
+            precision = 0
+            
+        if (tp + fn) > 0:
+            recall = tp / (tp + fn)
+        else:
+            recall = 0
+            
+        if (precision + recall) > 0:
+            f1score = 2 * (precision * recall) / (precision + recall)
+        else:
+            f1score = 0
+        
+        return accuracy, precision, recall, f1score
     
     def get_percentages(self):
         """Calculate and return percentage statistics."""
@@ -113,28 +192,21 @@ class DetectionStatistics:
         # Percentage of samples with weapons
         weapons_in_samples_pct = (self.samples_with_weapons / self.total_samples * 100) if self.total_samples > 0 else 0
         
-        # Calculate metrics with zero division protection
-        total_predictions = self.tp + self.tn + self.fp + self.fn
-        if total_predictions > 0:
-            self.accuracy = (self.tp + self.tn) / total_predictions
-        else:
-            self.accuracy = 0
-            
-        if (self.tp + self.fp) > 0:
-            self.precision = self.tp / (self.tp + self.fp)
-        else:
-            self.precision = 0
-            
-        if (self.tp + self.fn) > 0:
-            self.recall = self.tp / (self.tp + self.fn)
-        else:
-            self.recall = 0
-            
-        if (self.precision + self.recall) > 0:
-            self.f1score = 2 * ((self.precision * self.recall) / (self.precision + self.recall))
-        else:
-            self.f1score = 0  
-
+        # Calculate frame-level metrics
+        frame_accuracy, frame_precision, frame_recall, frame_f1score = self.calculate_metrics(
+            self.tp_frame, self.tn_frame, self.fp_frame, self.fn_frame
+        )
+        
+        # Calculate sample-level metrics
+        sample_accuracy, sample_precision, sample_recall, sample_f1score = self.calculate_metrics(
+            self.tp_sample, self.tn_sample, self.fp_sample, self.fn_sample
+        )
+        
+        # Update legacy metrics (frame-level for backward compatibility)
+        self.accuracy = frame_accuracy
+        self.precision = frame_precision
+        self.recall = frame_recall
+        self.f1score = frame_f1score
         
         avg_distance = np.mean(self.distances) if self.distances else 0
         
@@ -149,14 +221,36 @@ class DetectionStatistics:
             'people_with_weapons': self.people_with_weapons,
             'total_samples': self.total_samples,
             'samples_with_weapons': self.samples_with_weapons,
-            'accuracy':self.accuracy,
-            'precision':self.precision,
-            'recall':self.recall,
-            'f1score':self.f1score,
-            'tp':self.tp,
-            'tn':self.tn,
-            'fp':self.fp,
-            'fn':self.fn,
+            
+            # Frame-level metrics
+            'frame_accuracy': frame_accuracy,
+            'frame_precision': frame_precision,
+            'frame_recall': frame_recall,
+            'frame_f1score': frame_f1score,
+            'tp_frame': self.tp_frame,
+            'tn_frame': self.tn_frame,
+            'fp_frame': self.fp_frame,
+            'fn_frame': self.fn_frame,
+            
+            # Sample-level metrics
+            'sample_accuracy': sample_accuracy,
+            'sample_precision': sample_precision,
+            'sample_recall': sample_recall,
+            'sample_f1score': sample_f1score,
+            'tp_sample': self.tp_sample,
+            'tn_sample': self.tn_sample,
+            'fp_sample': self.fp_sample,
+            'fn_sample': self.fn_sample,
+            
+            # Legacy metrics (same as frame)
+            'accuracy': self.accuracy,
+            'precision': self.precision,
+            'recall': self.recall,
+            'f1score': self.f1score,
+            'tp': self.tp,
+            'tn': self.tn,
+            'fp': self.fp,
+            'fn': self.fn,
             
             'people_with_distance': self.people_with_distance,
             'avg_distance': avg_distance,
@@ -197,24 +291,35 @@ class DetectionStatistics:
         print(f"   ⚔️  Weapons in people: {stats['weapons_in_people_pct']:.1f}% of people have weapons")
         print(f"   📁 Weapons in samples: {stats['weapons_in_samples_pct']:.1f}% of samples contain weapons")
         
-        print(f'\nAccuracy: {stats['accuracy']}')
-        print(f'\nPrecision: {stats['precision']}')
-        print(f'\nRecall: {stats['recall']}')
-        print(f'\nF1-Score: {stats['f1score']}')
-        print(f'\nTP: {stats['tp']}')
-        print(f'\nTN: {stats['tn']}')
-        print(f'\nFP: {stats['fp']}')
-        print(f'\nFN: {stats['fn']}')
+        print(f"\\n🖼️  PER-FRAME METRICS:")
+        print(f"   Accuracy: {stats['frame_accuracy']:.4f}")
+        print(f"   Precision: {stats['frame_precision']:.4f}")
+        print(f"   Recall: {stats['frame_recall']:.4f}")
+        print(f"   F1-Score: {stats['frame_f1score']:.4f}")
+        print(f"   TP: {stats['tp_frame']}")
+        print(f"   TN: {stats['tn_frame']}")
+        print(f"   FP: {stats['fp_frame']}")
+        print(f"   FN: {stats['fn_frame']}")
+        
+        print(f"\\n📁 PER-SAMPLE METRICS:")
+        print(f"   Accuracy: {stats['sample_accuracy']:.4f}")
+        print(f"   Precision: {stats['sample_precision']:.4f}")
+        print(f"   Recall: {stats['sample_recall']:.4f}")
+        print(f"   F1-Score: {stats['sample_f1score']:.4f}")
+        print(f"   TP: {stats['tp_sample']}")
+        print(f"   TN: {stats['tn_sample']}")
+        print(f"   FP: {stats['fp_sample']}")
+        print(f"   FN: {stats['fn_sample']}")
 
         if stats['total_weapons'] > 0:
             avg_weapons_per_person = stats['total_weapons'] / stats['people_with_weapons']
-            print(f"   📊 Average weapons per armed person: {avg_weapons_per_person:.1f}")
+            print(f"\\n   📊 Average weapons per armed person: {avg_weapons_per_person:.1f}")
         
         print("\\n" + "=" * 60)
 
 
 class PeopleDetector:
-    def __init__(self, model_path: str, confidence_threshold: float = 0.4, enable_weapon_detection: bool = True):
+    def __init__(self, model_path: str, confidence_threshold: float = 0.4, enable_weapon_detection: bool = True, weapon_confidence_threshold: float = 0.2):
         """
         Initialize the people detector with YOLOv11 model.
         
@@ -222,6 +327,7 @@ class PeopleDetector:
             model_path: Path to the YOLO model file
             confidence_threshold: Minimum confidence for detections
             enable_weapon_detection: Whether to enable weapon detection on person crops
+            weapon_confidence_threshold: Minimum confidence for weapon detections
         """
         self.model = YOLO(model_path)
         self.confidence_threshold = confidence_threshold
@@ -235,11 +341,12 @@ class PeopleDetector:
         # Initialize weapon detector if available and enabled
         self.weapon_detector = None
         self.enable_weapon_detection = enable_weapon_detection and WEAPON_DETECTION_AVAILABLE
+        self.weapon_confidence_threshold = weapon_confidence_threshold
         
         if self.enable_weapon_detection:
             try:
-                self.weapon_detector = WeaponDetector()
-                print("Weapon detection enabled")
+                self.weapon_detector = WeaponDetector(confidence_threshold=weapon_confidence_threshold)
+                print(f"Weapon detection enabled (confidence: {weapon_confidence_threshold})")
             except Exception as e:
                 print(f"Failed to initialize weapon detector: {e}")
                 self.enable_weapon_detection = False
@@ -317,8 +424,8 @@ class PeopleDetector:
         if image is None:
             raise ValueError(f"Could not load image: {image_path}")
             
-        # Run inference
-        results = self.model(image, imgsz=640, iou=0.6, conf = self.confidence_threshold, verbose=False)
+        # Run inference - only detect person class (class 0)
+        results = self.model(image, imgsz=640, iou=0.6, conf=self.confidence_threshold, classes=[0], verbose=False)
         
         
         # Process results
@@ -585,6 +692,7 @@ class PeopleDetector:
         Args:
             input_dir: Directory containing input images
             output_dir: Directory to save processed images
+            with_weapons: Legacy parameter, now determined from directory name
         """
         # Create organized output directories
         detections_dir = os.path.join(output_dir, "detections")
@@ -594,6 +702,10 @@ class PeopleDetector:
         if self.save_crops:
             Path(crops_dir).mkdir(parents=True, exist_ok=True)
         
+        # Determine ground truth from directory name
+        dir_name = os.path.basename(input_dir)
+        has_weapons_ground_truth = dir_name.lower().startswith("real")
+        
         # Get all image files
         image_files = []
         for file in os.listdir(input_dir):
@@ -601,6 +713,7 @@ class PeopleDetector:
                 image_files.append(os.path.join(input_dir, file))
         
         print(f"Found {len(image_files)} images in {input_dir}")
+        print(f"Ground truth for this directory: {'Has weapons' if has_weapons_ground_truth else 'No weapons'}")
         
         # Process each image
         for i, image_path in enumerate(image_files):
@@ -644,8 +757,8 @@ class PeopleDetector:
                 # Extract distances from detections
                 distances = [d['distance_m'] for d in detections if 'distance_m' in d]
                 
-                # Update statistics
-                self.stats.add_image_results(len(detections), weapons_detected, people_with_weapons_count, with_weapons, distances)
+                # Update statistics with ground truth from directory name
+                self.stats.add_image_results(len(detections), weapons_detected, people_with_weapons_count, has_weapons_ground_truth, distances)
                 
                 # Print detection summary
                 if detections:
@@ -656,9 +769,12 @@ class PeopleDetector:
                         summary_parts.append(f"detected {weapons_detected} weapons")
                         if people_with_weapons_count > 0:
                             summary_parts.append(f"({people_with_weapons_count} people with weapons)")
-                    #print(f"  -> {', '.join(summary_parts)}")
+                    ground_truth_label = "real weapons" if has_weapons_ground_truth else "no weapons"
+                    summary_parts.append(f"GT: {ground_truth_label}")
+                    print(f"  -> {', '.join(summary_parts)}")
                 else:
-                    print(f"  -> No people detected, saved full image only")
+                    ground_truth_label = "real weapons" if has_weapons_ground_truth else "no weapons"
+                    print(f"  -> No people detected, GT: {ground_truth_label}")
                     
             except Exception as e:
                 print(f"Error processing {image_path}: {str(e)}")
@@ -666,6 +782,7 @@ class PeopleDetector:
         # Print directory summary for single directory processing
         if not hasattr(self.stats, '_in_batch_mode'):
             print(f"\\nDirectory processing complete!")
+            self.stats.print_summary()
             stats = self.stats.get_percentages()
             print(f"Images processed: {stats['total_images']}")
             print(f"People detected: {stats['total_people']}")
@@ -677,7 +794,7 @@ class PeopleDetector:
                 print(f"Distance measurements: {stats['total_distances']}")
                 print(f"Average distance: {stats['avg_distance']:.2f}m")
     
-    def process_all_sample_directories(self, samples_dir: str, output_base_dir: str, with_weapons):
+    def process_all_sample_directories(self, samples_dir: str, output_base_dir: str):
         """
         Process all sample directories and maintain organized folder structure.
         
@@ -711,16 +828,20 @@ class PeopleDetector:
             
             print(f"\n Processing sample {sample_idx}/{len(sample_dirs)}: {sample_dir}")
             
-            # Mark start of new sample for statistics
-            self.stats.start_new_sample()
+            # Determine ground truth for this sample
+            sample_ground_truth = sample_dir.lower().startswith("real")
             
-            self.process_directory(input_path, temp_output, with_weapons)
+            # Mark start of new sample for statistics with ground truth
+            self.stats.start_new_sample(sample_ground_truth)
+            
+            # Process directory - ground truth is now determined from filenames
+            self.process_directory(input_path, temp_output)
             
             # Move results to organized structure
             self._organize_sample_output(temp_output, sample_detections_dir, sample_crops_dir)
         
         # Finalize statistics
-        #self.stats.finalize()
+        self.stats.finalize()
         
         # Clean up empty weapon detection directories
         self._cleanup_empty_weapon_directories(output_base_dir)

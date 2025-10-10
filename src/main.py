@@ -31,6 +31,8 @@ def main():
                        help='Confidence threshold for detections')
     parser.add_argument('--weapon-confidence', type=float, default=0.2,
                        help='Confidence threshold for weapon detections (default: 0.2)')
+    parser.add_argument('--sample-majority-threshold', type=int, default=1,
+                       help='Number of frames with weapon detections needed to classify sample as having weapons (default: 1)')
     parser.add_argument('--save-crops', action='store_true', default=True,
                        help='Save individual person crops (default: True)')
     parser.add_argument('--no-crops', action='store_true',
@@ -69,7 +71,7 @@ def main():
     
     # Initialize detector
     print(f"Initializing detector with model: {args.model}")
-    detector = PeopleDetector(args.model, args.confidence, enable_weapon_detection=enable_weapons, weapon_confidence_threshold=args.weapon_confidence)
+    detector = PeopleDetector(args.model, args.confidence, enable_weapon_detection=enable_weapons, weapon_confidence_threshold=args.weapon_confidence, sample_majority_threshold=args.sample_majority_threshold)
     
     # Set crop saving preference
     detector.save_crops = save_crops
@@ -81,6 +83,7 @@ def main():
     print(f"Weapon detection: {'Enabled' if enable_weapons and detector.enable_weapon_detection else 'Disabled'}")
     if enable_weapons and detector.enable_weapon_detection:
         print(f"Weapon confidence threshold: {args.weapon_confidence}")
+    print(f"Sample majority threshold: {args.sample_majority_threshold} frame(s)")
     print(f"Ground truth determined from filenames: 'real*' = has weapons, 'falso*' = no weapons")
     
     # Check if input is a single directory with images or a parent directory with subdirectories

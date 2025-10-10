@@ -34,7 +34,15 @@ except ImportError as e:
 class DetectionStatistics:
     """Class to track comprehensive detection statistics."""
     
-    def __init__(self):
+    def __init__(self, sample_majority_threshold=1):
+        """
+        Initialize statistics tracker.
+        
+        Args:
+            sample_majority_threshold: Number of frames with weapon detections 
+                                      needed to classify a sample as having weapons
+        """
+        self.sample_majority_threshold = sample_majority_threshold
         self.reset()
     
     def reset(self):
@@ -59,6 +67,9 @@ class DetectionStatistics:
         self.tn_sample = 0
         self.fp_sample = 0
         self.fn_sample = 0
+        
+        # Per-sample metrics by class
+        self.sample_metrics_by_class = {}  # {'real': {tp, tn, fp, fn}, 'falso': {...}}
         
         # Legacy single metrics (will be same as frame metrics)
         self.tp = 0
@@ -86,8 +97,11 @@ class DetectionStatistics:
         # Sample tracking
         self.current_sample_ground_truth = False
         self.current_sample_detected_weapons = False
+        self.current_sample_class = None
+        self.current_sample_frames_with_weapons = 0
+        self.current_sample_total_frames = 0
     
-    def start_new_sample(self, sample_ground_truth=False):
+    def start_new_sample(self, sample_ground_truth=False, sample_class=None):
         """Mark the start of a new sample directory."""
         # Finalize previous sample if this isn't the first one
         if hasattr(self, 'current_sample_ground_truth'):
@@ -97,28 +111,45 @@ class DetectionStatistics:
         self.current_sample_ground_truth = sample_ground_truth
         self.current_sample_detected_weapons = False
         self.current_sample_has_weapons = False
+        self.current_sample_class = sample_class
+        self.current_sample_frames_with_weapons = 0
+        self.current_sample_total_frames = 0
         self.total_samples += 1
     
     def finalize_current_sample(self):
-        """Finalize the current sample and update sample-level metrics."""
+        """Finalize the current sample and update sample-level metrics using majority voting."""
         if not hasattr(self, 'current_sample_ground_truth'):
             return
-            
+        
+        # Determine if sample has weapons using majority voting
+        # Sample is classified as having weapons if >= threshold frames have weapons
+        sample_has_weapons = self.current_sample_frames_with_weapons >= self.sample_majority_threshold
+        
         # Update sample count
-        if self.current_sample_has_weapons:
+        if sample_has_weapons:
             self.samples_with_weapons += 1
         
         # Update sample-level confusion matrix
-        if self.current_sample_detected_weapons:  # Weapons detected in sample
+        if sample_has_weapons:  # Weapons detected in sample (via majority voting)
             if self.current_sample_ground_truth:  # Ground truth: should have weapons
+                metric_result = 'tp'
                 self.tp_sample += 1  # True Positive
             else:  # Ground truth: should not have weapons
+                metric_result = 'fp'
                 self.fp_sample += 1  # False Positive
         else:  # No weapons detected in sample
             if self.current_sample_ground_truth:  # Ground truth: should have weapons
+                metric_result = 'fn'
                 self.fn_sample += 1  # False Negative
             else:  # Ground truth: should not have weapons
+                metric_result = 'tn'
                 self.tn_sample += 1  # True Negative
+        
+        # Update per-sample metrics by class
+        if self.current_sample_class is not None:
+            if self.current_sample_class not in self.sample_metrics_by_class:
+                self.sample_metrics_by_class[self.current_sample_class] = {'tp': 0, 'tn': 0, 'fp': 0, 'fn': 0}
+            self.sample_metrics_by_class[self.current_sample_class][metric_result] += 1
     
     def add_image_results(self, num_people, num_weapons, people_with_weapons_count, has_weapons_ground_truth, distances=None, distance_pairs=None, real_distance=None, camera_height=None, sample_class=None):
         """Add results from processing one image."""
@@ -131,10 +162,12 @@ class DetectionStatistics:
         self.total_weapons += num_weapons
         self.people_with_weapons += people_with_weapons_count
         
-        # Track sample-level detection
+        # Track sample-level detection (for majority voting)
+        self.current_sample_total_frames += 1
         if num_weapons > 0:
             self.current_sample_has_weapons = True
             self.current_sample_detected_weapons = True
+            self.current_sample_frames_with_weapons += 1
         
         # Calculate per-frame metrics
         detected_weapon = num_weapons > 0
@@ -393,17 +426,33 @@ class DetectionStatistics:
         
         print("\n" + "=" * 60)
         
-        '''
-        print(f"PER-SAMPLE METRICS:")
-        print(f"   Accuracy: {stats['sample_accuracy']:.4f}")
-        print(f"   Precision: {stats['sample_precision']:.4f}")
-        print(f"   Recall: {stats['sample_recall']:.4f}")
+        print(f"\nPER-SAMPLE METRICS (Majority Threshold: {self.sample_majority_threshold} frame(s)):")
+        print(f"   Accuracy:  {stats['sample_accuracy']:.3f}")
+        print(f"   Precision: {stats['sample_precision']:.3f}")
+        print(f"   Recall:    {stats['sample_recall']:.3f}")
+        print(f"   F1-Score:  {stats['sample_f1score']:.3f}")
+        print(f"   TP: {stats['tp_sample']}, TN: {stats['tn_sample']}, FP: {stats['fp_sample']}, FN: {stats['fn_sample']}")
+        
+        # Print per-sample metrics by class
+        if self.sample_metrics_by_class:
+            print(f"\nPER-SAMPLE METRICS BY CLASS (Majority Threshold: {self.sample_majority_threshold} frame(s)):")
+            for cls in sorted(self.sample_metrics_by_class.keys()):
+                m = self.sample_metrics_by_class[cls]
+                acc, prec, rec, f1 = self.calculate_metrics(m['tp'], m['tn'], m['fp'], m['fn'])
+                print(f"   Class: {cls}")
+                print(f"      Accuracy:  {acc:.3f}")
+                print(f"      Precision: {prec:.3f}")
+                print(f"      Recall:    {rec:.3f}")
+                print(f"      F1-Score:  {f1:.3f}")
+                print(f"      TP: {m['tp']}, TN: {m['tn']}, FP: {m['fp']}, FN: {m['fn']}")
+        
+        print("\n" + "=" * 60)
         print(f"   F1-Score: {stats['sample_f1score']:.4f}")
         print(f"   TP: {stats['tp_sample']}")
         print(f"   TN: {stats['tn_sample']}")
         print(f"   FP: {stats['fp_sample']}")
         print(f"   FN: {stats['fn_sample']}")
-        '''
+        
 
         '''
         if stats['total_weapons'] > 0:
@@ -422,7 +471,7 @@ class DetectionStatistics:
 
 
 class PeopleDetector:
-    def __init__(self, model_path: str, confidence_threshold: float = 0.4, enable_weapon_detection: bool = True, weapon_confidence_threshold: float = 0.2):
+    def __init__(self, model_path: str, confidence_threshold: float = 0.4, enable_weapon_detection: bool = True, weapon_confidence_threshold: float = 0.2, sample_majority_threshold: int = 1):
         """
         Initialize the people detector with YOLOv11 model.
         
@@ -431,6 +480,7 @@ class PeopleDetector:
             confidence_threshold: Minimum confidence for detections
             enable_weapon_detection: Whether to enable weapon detection on person crops
             weapon_confidence_threshold: Minimum confidence for weapon detections
+            sample_majority_threshold: Number of frames with weapons needed to classify sample as having weapons
         """
         self.model = YOLO(model_path)
         self.confidence_threshold = confidence_threshold
@@ -438,8 +488,8 @@ class PeopleDetector:
         self.person_class_id = PERSON_CLASS_ID
         self.save_crops = True  # Default to saving crops
         
-        # Initialize statistics tracker
-        self.stats = DetectionStatistics()
+        # Initialize statistics tracker with majority threshold
+        self.stats = DetectionStatistics(sample_majority_threshold=sample_majority_threshold)
         
         # Initialize weapon detector if available and enabled
         self.weapon_detector = None
@@ -946,11 +996,12 @@ class PeopleDetector:
             
             print(f"\n Processing sample {sample_idx}/{len(sample_dirs)}: {sample_dir}")
             
-            # Determine ground truth for this sample
+            # Determine ground truth and class for this sample
             sample_ground_truth = sample_dir.lower().startswith("real")
+            sample_class = 'real' if sample_dir.lower().startswith('real') else 'falso'
             
-            # Mark start of new sample for statistics with ground truth
-            self.stats.start_new_sample(sample_ground_truth)
+            # Mark start of new sample for statistics with ground truth and class
+            self.stats.start_new_sample(sample_ground_truth, sample_class)
             
             # Process directory - ground truth is now determined from filenames
             self.process_directory(input_path, temp_output)

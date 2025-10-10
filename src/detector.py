@@ -73,6 +73,15 @@ class DetectionStatistics:
         # Distance tracking
         self.distances = []
         self.people_with_distance = 0
+        # For RMSE: list of (estimated, real) pairs
+        self.distance_pairs = []
+        # Distance pairs per camera height for RMSE calculation
+        self.distance_pairs_by_height = {}  # {2: [(est, real), ...], 5: [...]}
+        
+        # Segmented metrics: per distance, height, and class
+        self.metrics_by_distance = {}  # {5: {tp, tn, fp, fn}, 10: {...}}
+        self.metrics_by_height = {}    # {2: {tp, tn, fp, fn}, 5: {...}}
+        self.metrics_by_class = {}     # {'real': {tp, tn, fp, fn}, 'falso': {...}}
         
         # Sample tracking
         self.current_sample_ground_truth = False
@@ -111,7 +120,7 @@ class DetectionStatistics:
             else:  # Ground truth: should not have weapons
                 self.tn_sample += 1  # True Negative
     
-    def add_image_results(self, num_people, num_weapons, people_with_weapons_count, has_weapons_ground_truth, distances=None):
+    def add_image_results(self, num_people, num_weapons, people_with_weapons_count, has_weapons_ground_truth, distances=None, distance_pairs=None, real_distance=None, camera_height=None, sample_class=None):
         """Add results from processing one image."""
 
         self.total_images += 1
@@ -128,16 +137,38 @@ class DetectionStatistics:
             self.current_sample_detected_weapons = True
         
         # Calculate per-frame metrics
-        if num_weapons > 0:  # Weapons detected in frame
+        detected_weapon = num_weapons > 0
+        
+        if detected_weapon:  # Weapons detected in frame
             if has_weapons_ground_truth:  # Ground truth: should have weapons
+                metric_result = 'tp'
                 self.tp_frame += 1  # True Positive
             else:  # Ground truth: should not have weapons
+                metric_result = 'fp'
                 self.fp_frame += 1  # False Positive
         else:  # No weapons detected in frame
             if has_weapons_ground_truth:  # Ground truth: should have weapons
+                metric_result = 'fn'
                 self.fn_frame += 1  # False Negative
             else:  # Ground truth: should not have weapons
+                metric_result = 'tn'
                 self.tn_frame += 1  # True Negative
+        
+        # Update segmented metrics
+        if real_distance is not None:
+            if real_distance not in self.metrics_by_distance:
+                self.metrics_by_distance[real_distance] = {'tp': 0, 'tn': 0, 'fp': 0, 'fn': 0}
+            self.metrics_by_distance[real_distance][metric_result] += 1
+        
+        if camera_height is not None:
+            if camera_height not in self.metrics_by_height:
+                self.metrics_by_height[camera_height] = {'tp': 0, 'tn': 0, 'fp': 0, 'fn': 0}
+            self.metrics_by_height[camera_height][metric_result] += 1
+        
+        if sample_class is not None:
+            if sample_class not in self.metrics_by_class:
+                self.metrics_by_class[sample_class] = {'tp': 0, 'tn': 0, 'fp': 0, 'fn': 0}
+            self.metrics_by_class[sample_class][metric_result] += 1
         
         # Update legacy metrics (same as frame metrics for backward compatibility)
         self.tp = self.tp_frame
@@ -149,6 +180,24 @@ class DetectionStatistics:
         if distances:
             self.distances.extend(distances)
             self.people_with_distance += len(distances)
+        # Add (estimated, real) pairs for RMSE
+        if distance_pairs:
+            self.distance_pairs.extend(distance_pairs)
+            # Also track by camera height for RMSE
+            if camera_height is not None:
+                if camera_height not in self.distance_pairs_by_height:
+                    self.distance_pairs_by_height[camera_height] = []
+                self.distance_pairs_by_height[camera_height].extend(distance_pairs)
+    def compute_rmse(self, distance_pairs=None):
+        """Compute RMSE for distance estimation (only where real distance is available)."""
+        pairs = distance_pairs if distance_pairs is not None else self.distance_pairs
+        if not pairs:
+            return None
+        diffsq = [(est-real)**2 for est, real in pairs if real is not None]
+        if not diffsq:
+            return None
+        mse = sum(diffsq) / len(diffsq)
+        return mse ** 0.5
     
     def finalize(self):
         """Finalize statistics (call at the end)."""
@@ -208,8 +257,6 @@ class DetectionStatistics:
         self.recall = frame_recall
         self.f1score = frame_f1score
         
-        avg_distance = np.mean(self.distances) if self.distances else 0
-        
         return {
             'people_in_images_pct': people_in_images_pct,
             'weapons_in_people_pct': weapons_in_people_pct,
@@ -253,7 +300,6 @@ class DetectionStatistics:
             'fn': self.fn,
             
             'people_with_distance': self.people_with_distance,
-            'avg_distance': avg_distance,
             'total_distances': len(self.distances)
         }
     
@@ -262,46 +308,93 @@ class DetectionStatistics:
         stats = self.get_percentages()
         
         print("\\n" + "=" * 60)
-        print("📊 COMPREHENSIVE DETECTION STATISTICS")
+        print("COMPREHENSIVE DETECTION STATISTICS")
         print("=" * 60)
         
-        print(f"\\n📸 IMAGE STATISTICS:")
+        print(f"IMAGE STATISTICS:")
         print(f"   Total images processed: {stats['total_images']:,}")
         print(f"   Images with people: {stats['images_with_people']:,} ({stats['people_in_images_pct']:.1f}%)")
         
-        print(f"\\n👥 PEOPLE STATISTICS:")
+        print(f"PEOPLE STATISTICS:")
         print(f"   Total people detected: {stats['total_people']:,}")
         print(f"   People with weapons: {stats['people_with_weapons']:,} ({stats['weapons_in_people_pct']:.1f}%)")
         
-        print(f"\\n🔫 WEAPON STATISTICS:")
+        print(f"WEAPON STATISTICS:")
         print(f"   Total weapons detected: {stats['total_weapons']:,}")
         
-        print(f"\\n📁 SAMPLE STATISTICS:")
+        print(f"SAMPLE STATISTICS:")
         print(f"   Total samples processed: {stats['total_samples']:,}")
         print(f"   Samples with weapons: {stats['samples_with_weapons']:,} ({stats['weapons_in_samples_pct']:.1f}%)")
         
         if stats['total_distances'] > 0:
             print(f"   People with distance data: {stats['people_with_distance']:,}")
-            print(f"   Average distance: {stats['avg_distance']:.2f}m")
         else:
             print(f"   No distance data available")
         
-        print(f"\\n�� KEY PERCENTAGES:")
-        print(f"   🎯 People in images: {stats['people_in_images_pct']:.1f}% of images contain people")
-        print(f"   ⚔️  Weapons in people: {stats['weapons_in_people_pct']:.1f}% of people have weapons")
-        print(f"   📁 Weapons in samples: {stats['weapons_in_samples_pct']:.1f}% of samples contain weapons")
+        print(f"KEY PERCENTAGES:")
+        print(f"People in images: {stats['people_in_images_pct']:.1f}% of images contain people")
+        print(f"Weapons in people: {stats['weapons_in_people_pct']:.1f}% of people have weapons")
+        print(f"Weapons in samples: {stats['weapons_in_samples_pct']:.1f}% of samples contain weapons")
         
-        print(f"\\n🖼️  PER-FRAME METRICS:")
-        print(f"   Accuracy: {stats['frame_accuracy']:.4f}")
-        print(f"   Precision: {stats['frame_precision']:.4f}")
-        print(f"   Recall: {stats['frame_recall']:.4f}")
-        print(f"   F1-Score: {stats['frame_f1score']:.4f}")
-        print(f"   TP: {stats['tp_frame']}")
-        print(f"   TN: {stats['tn_frame']}")
-        print(f"   FP: {stats['fp_frame']}")
-        print(f"   FN: {stats['fn_frame']}")
+        print(f"\nOVERALL METRICS:")
+        print(f"   Accuracy:  {stats['frame_accuracy']:.3f}")
+        print(f"   Precision: {stats['frame_precision']:.3f}")
+        print(f"   Recall:    {stats['frame_recall']:.3f}")
+        print(f"   F1-Score:  {stats['frame_f1score']:.3f}")
+        print(f"   TP: {stats['tp_frame']}, TN: {stats['tn_frame']}, FP: {stats['fp_frame']}, FN: {stats['fn_frame']}")
         
-        print(f"\\n📁 PER-SAMPLE METRICS:")
+        # Print segmented metrics
+        if self.metrics_by_distance:
+            print(f"\nMETRICS BY DISTANCE:")
+            for dist in sorted(self.metrics_by_distance.keys()):
+                m = self.metrics_by_distance[dist]
+                acc, prec, rec, f1 = self.calculate_metrics(m['tp'], m['tn'], m['fp'], m['fn'])
+                print(f"   Distance: {dist}m")
+                print(f"      Accuracy:  {acc:.3f}")
+                print(f"      Precision: {prec:.3f}")
+                print(f"      Recall:    {rec:.3f}")
+                print(f"      F1-Score:  {f1:.3f}")
+                print(f"      TP: {m['tp']}, TN: {m['tn']}, FP: {m['fp']}, FN: {m['fn']}")
+        
+        if self.metrics_by_height:
+            print(f"\nMETRICS BY CAMERA HEIGHT:")
+            for height in sorted(self.metrics_by_height.keys()):
+                m = self.metrics_by_height[height]
+                acc, prec, rec, f1 = self.calculate_metrics(m['tp'], m['tn'], m['fp'], m['fn'])
+                # Calculate RMSE for this height
+                rmse_height = None
+                if height in self.distance_pairs_by_height:
+                    rmse_height = self.compute_rmse(self.distance_pairs_by_height[height])
+                print(f"   Height: {height}m")
+                print(f"      Accuracy:  {acc:.3f}")
+                print(f"      Precision: {prec:.3f}")
+                print(f"      Recall:    {rec:.3f}")
+                print(f"      F1-Score:  {f1:.3f}")
+                if rmse_height is not None:
+                    print(f"      RMSE:      {rmse_height:.3f}m")
+                print(f"      TP: {m['tp']}, TN: {m['tn']}, FP: {m['fp']}, FN: {m['fn']}")
+        
+        if self.metrics_by_class:
+            print(f"\nMETRICS BY CLASS:")
+            for cls in sorted(self.metrics_by_class.keys()):
+                m = self.metrics_by_class[cls]
+                acc, prec, rec, f1 = self.calculate_metrics(m['tp'], m['tn'], m['fp'], m['fn'])
+                print(f"   Class: {cls}")
+                print(f"      Accuracy:  {acc:.3f}")
+                print(f"      Precision: {prec:.3f}")
+                print(f"      Recall:    {rec:.3f}")
+                print(f"      F1-Score:  {f1:.3f}")
+                print(f"      TP: {m['tp']}, TN: {m['tn']}, FP: {m['fp']}, FN: {m['fn']}")
+        
+        # Print overall RMSE
+        rmse = self.compute_rmse()
+        if rmse is not None:
+            print(f"\nOVERALL DISTANCE ESTIMATION RMSE: {rmse:.3f}m")
+        
+        print("\n" + "=" * 60)
+        
+        '''
+        print(f"PER-SAMPLE METRICS:")
         print(f"   Accuracy: {stats['sample_accuracy']:.4f}")
         print(f"   Precision: {stats['sample_precision']:.4f}")
         print(f"   Recall: {stats['sample_recall']:.4f}")
@@ -310,11 +403,21 @@ class DetectionStatistics:
         print(f"   TN: {stats['tn_sample']}")
         print(f"   FP: {stats['fp_sample']}")
         print(f"   FN: {stats['fn_sample']}")
+        '''
 
+        '''
         if stats['total_weapons'] > 0:
             avg_weapons_per_person = stats['total_weapons'] / stats['people_with_weapons']
-            print(f"\\n   📊 Average weapons per armed person: {avg_weapons_per_person:.1f}")
-        
+            print(f"\n   📊 Average weapons per armed person: {avg_weapons_per_person:.1f}")
+        '''
+
+        # Print RMSE for distance estimation
+        rmse = self.compute_rmse()
+        if rmse is not None:
+            print(f"\nDistance Estimation RMSE: {rmse:.3f} meters")
+        else:
+            print(f"\nDistance Estimation RMSE: N/A (no ground truth)")
+
         print("\\n" + "=" * 60)
 
 
@@ -392,22 +495,25 @@ class PeopleDetector:
             return None
         
     def extract_camera_height_from_filename(self, filepath: str):
-        try:
-            dir_path = os.path.dirname(filepath)
-            dir_name = os.path.basename(dir_path)
-
-            if not dir_name:
-                dir_name = os.path.splitext(os.path.basename(filepath))[0]
-            parts = dir_name.split('_')
-
-            for i in range(len(parts) - 1):
-                if parts[i + 1].isdigit() and i + 2 < len(parts) and parts[i + 2].isdigit():
-                    height = float(parts[i + 2])
-                    return height
-            
-            return None
-        except (ValueError, IndexError):
-            return None
+        """
+        Extracts the camera height from folder name.
+        Pattern: class_distance_height_clip_...
+        Example: falso_05_02_clip_000 -> distance=05, height=02
+        """
+        import re
+        dir_path = os.path.dirname(filepath)
+        dir_name = os.path.basename(dir_path)
+        if not dir_name:
+            dir_name = os.path.splitext(os.path.basename(filepath))[0]
+        numbers = re.findall(r'\d{2,3}', dir_name)
+        # numbers[0] = distance (05), numbers[1] = height (02), numbers[2] = clip number (000)
+        if len(numbers) >= 2:
+            try:
+                height = float(numbers[1])
+                return height
+            except ValueError:
+                pass
+        return None
         
     def detect_people(self, image_path: str):
         """
@@ -454,11 +560,15 @@ class PeopleDetector:
                                 # Extract real distance and camera height from file path
                                 image_name = os.path.basename(image_path)
                                 real_distance_m = self.extract_real_distance_from_filename(image_path)
-                                
+                                camera_height_m = self.extract_camera_height_from_filename(image_path)
+                                # Build log message with proper formatting
+                                real_dist_str = f"{real_distance_m:.2f}" if real_distance_m is not None else "N/A"
+                                cam_height_str = f"{camera_height_m:.2f}" if camera_height_m is not None else "N/A"
                                 log_message = (f"Image: {image_name}, Person: {person_idx + 1}, "
                                              f"PixelHeight: {person_height_px:.1f}px, "
                                              f"Estimated: {distance_m:.2f}m, "
-                                             f"Real: {real_distance_m:.2f}m, " if real_distance_m else f"Real: N/A, "
+                                             f"Real: {real_dist_str}m, "
+                                             f"CameraHeight: {cam_height_str}m, "
                                              f"Confidence: {confidence:.3f}, "
                                              f"BBox: [{int(x1)}, {int(y1)}, {int(x2)}, {int(y2)}]")
                                 self.distance_logger.info(log_message)
@@ -466,7 +576,9 @@ class PeopleDetector:
                                 # Enhanced console output
                                 console_msg = f"  -> Person {person_idx + 1}: Est:{distance_m:.2f}m"
                                 if real_distance_m is not None:
-                                    console_msg += f", Real:{real_distance_m:.2f}m)"
+                                    console_msg += f", Real:{real_distance_m:.2f}m"
+                                if camera_height_m is not None:
+                                    console_msg += f", CamHeight:{camera_height_m:.2f}m"
                                 console_msg += f", {person_height_px:.1f}px"
                                 print(console_msg)
                                 
@@ -754,11 +866,18 @@ class PeopleDetector:
                         weapon_results = self.detect_weapons_in_crops(person_crops)
                         weapons_detected, people_with_weapons_count = self.save_weapon_detection_results(weapon_results, output_dir, name)
                 
-                # Extract distances from detections
+                # Extract distances and (estimated, real) pairs from detections
                 distances = [d['distance_m'] for d in detections if 'distance_m' in d]
-                
+                real_distance = self.extract_real_distance_from_filename(image_path)
+                camera_height = self.extract_camera_height_from_filename(image_path)
+                sample_class = 'real' if dir_name.lower().startswith('real') else 'falso'
+                distance_pairs = []
+                if real_distance is not None:
+                    for d in detections:
+                        if 'distance_m' in d:
+                            distance_pairs.append((d['distance_m'], real_distance))
                 # Update statistics with ground truth from directory name
-                self.stats.add_image_results(len(detections), weapons_detected, people_with_weapons_count, has_weapons_ground_truth, distances)
+                self.stats.add_image_results(len(detections), weapons_detected, people_with_weapons_count, has_weapons_ground_truth, distances, distance_pairs, real_distance, camera_height, sample_class)
                 
                 # Print detection summary
                 if detections:
@@ -770,12 +889,12 @@ class PeopleDetector:
                         if people_with_weapons_count > 0:
                             summary_parts.append(f"({people_with_weapons_count} people with weapons)")
                     ground_truth_label = "real weapons" if has_weapons_ground_truth else "no weapons"
-                    summary_parts.append(f"GT: {ground_truth_label}")
+                    summary_parts.append(f"ground: {ground_truth_label}")
                     print(f"  -> {', '.join(summary_parts)}")
                 else:
                     ground_truth_label = "real weapons" if has_weapons_ground_truth else "no weapons"
-                    print(f"  -> No people detected, GT: {ground_truth_label}")
-                    
+                    print(f"  -> No people detected, ground: {ground_truth_label}")
+
             except Exception as e:
                 print(f"Error processing {image_path}: {str(e)}")
         
@@ -792,7 +911,6 @@ class PeopleDetector:
                     print(f"Weapon rate: {stats['weapons_in_people_pct']:.1f}% of people have weapons")
             if stats['total_distances'] > 0:
                 print(f"Distance measurements: {stats['total_distances']}")
-                print(f"Average distance: {stats['avg_distance']:.2f}m")
     
     def process_all_sample_directories(self, samples_dir: str, output_base_dir: str):
         """
@@ -941,4 +1059,4 @@ class PeopleDetector:
                 pass
         
         if removed_count > 0:
-            print(f"\n🧹 Cleaned up {removed_count} empty weapon detection directories")
+            print(f"\nCleaned up {removed_count} empty weapon detection directories")

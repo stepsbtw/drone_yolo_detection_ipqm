@@ -1,7 +1,7 @@
 .venv
 inputs
 models
-output
+output*
 
 __pycache__
 .DS_Store

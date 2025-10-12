@@ -142,6 +142,51 @@ python preprocess_videos.py -X 15 -Z 1080p -W 60 -C compressed -F 15 -B 1M
 - `-F, --fps`: Target FPS (optional)
 - `-B, --max-bitrate`: Maximum bitrate limit, e.g., '2M', '1000k' (optional)
 
+## 📈 Metrics Analysis
+
+Analyze detection performance and generate comprehensive metrics using `analyze_metrics.py`:
+
+```bash
+# Basic usage (Unique frames mode with full validation)
+python analyze_metrics.py
+
+# Individual crops mode
+python analyze_metrics.py B
+
+# Custom validation modes
+python analyze_metrics.py A errors  # Show only errors
+python analyze_metrics.py A silent  # No validation output
+python analyze_metrics.py B full    # Full validation report
+```
+
+### Parameters
+- **Option** (positional): Analysis mode
+  - `A`: Unique frames mode (default) - counts each frame once
+  - `B`: Individual crops mode - counts each person detection separately
+- **Validation** (positional): Validation output level
+  - `full`: Complete validation report (default)
+  - `errors`: Show only validation errors
+  - `silent`: Run validation without output
+  - `none`: Skip validation
+
+### Output
+- **Console**: Detailed metrics breakdown by confidence and fraction thresholds
+- **Excel File**: `metricas_analise_[A/B]_[timestamp].xlsx` with two sheets:
+  - Análise por Frame: Frame-level or crop-level metrics
+  - Análise por Sample: Sample-level metrics with majority voting
+
+### Metrics Calculated
+- **True Positives (TP)**: Correctly identified weapon detections
+- **True Negatives (TN)**: Correctly identified non-weapon cases
+- **False Positives (FP)**: Incorrectly identified as having weapons
+- **False Negatives (FN)**: Missed weapon detections
+- **Accuracy**: Overall correctness (TP + TN) / Total
+- **Precision**: Reliability of positive predictions TP / (TP + FP)
+- **Recall**: Sensitivity to actual positives TP / (TP + FN)
+- **F1-Score**: Harmonic mean of precision and recall
+
+> **⚠️ Note**: This script contains hard-coded values and paths to accommodate manual labeling of results (e.g., `MANUAL_FALSE_POSITIVES`, `PERSON_DETECTIONS_PER_SAMPLE`, `CROPS_DIR`, `WEAPON_DETECTIONS_DIR`). These must be adjusted according to each trial and your specific directory structure.
+
 ## 🏗️ Pipeline Components
 
 ### 1. Person Detection (YOLOv11)

@@ -46,8 +46,9 @@ class WeaponDetector:
             tuple: (annotated_image, detections_info, weapon_crops)
         """
         try:
-            # Run YOLOv8 inference
-            results = self.model(image, conf=self.confidence_threshold, verbose=False)
+            # Run YOLOv8 inference with IOU threshold for better NMS
+            # iou=0.4 means boxes with IoU > 0.4 will be suppressed (keeps only best box)
+            results = self.model(image, conf=self.confidence_threshold, iou=0.4, verbose=False)
             
             # Create annotated image
             annotated_image = image.copy()

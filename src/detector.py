@@ -565,12 +565,13 @@ class PeopleDetector:
                 pass
         return None
         
-    def detect_people(self, image_path: str):
+    def detect_people(self, image_path: str, draw_boxes: bool = False):
         """
         Detect people in a single image.
         
         Args:
             image_path: Path to the input image
+            draw_boxes: Whether to draw boxes on the image (for combined visualization)
             
         Returns:
             tuple: (image_with_boxes, detections_info)
@@ -635,21 +636,23 @@ class PeopleDetector:
                             except Exception as e:
                                 print(f"Warning: Failed to estimate distance for person {person_idx + 1}: {e}")
                         
-                        # Draw bounding box
-                        cv2.rectangle(image_with_boxes, 
-                                    (int(x1), int(y1)), 
-                                    (int(x2), int(y2)), 
-                                    BOX_COLOR, BOX_THICKNESS)
-                        
-                        # Add confidence label
-                        label = f"Person: {confidence:.2f}"
-                        if distance_m is not None:
-                            label += f" ({distance_m:.1f}m)"
-                        
-                        cv2.putText(image_with_boxes, label, 
-                                  (int(x1), int(y1) - 10), 
-                                  cv2.FONT_HERSHEY_SIMPLEX, FONT_SCALE, 
-                                  BOX_COLOR, FONT_THICKNESS)
+                        # Draw bounding box in GREEN for person (only if draw_boxes is True)
+                        if draw_boxes:
+                            person_box_color = (0, 255, 0)  # Green for person
+                            cv2.rectangle(image_with_boxes, 
+                                        (int(x1), int(y1)), 
+                                        (int(x2), int(y2)), 
+                                        person_box_color, BOX_THICKNESS)
+                            
+                            # Add confidence label
+                            label = f"Person: {confidence:.2f}"
+                            if distance_m is not None:
+                                label += f" ({distance_m:.1f}m)"
+                            
+                            cv2.putText(image_with_boxes, label, 
+                                      (int(x1), int(y1) - 10), 
+                                      cv2.FONT_HERSHEY_SIMPLEX, FONT_SCALE, 
+                                      person_box_color, FONT_THICKNESS)
                         
                         # Store detection info
                         detection_info = {
@@ -742,6 +745,51 @@ class PeopleDetector:
             return []
         
         return self.weapon_detector.process_multiple_crops(crops_with_info)
+    
+    def draw_weapon_boxes_on_full_image(self, image, weapon_results):
+        """
+        Draw weapon bounding boxes in RED on the full image.
+        
+        Args:
+            image: Full image (numpy array)
+            weapon_results: List of weapon detection results from detect_weapons_in_crops
+            
+        Returns:
+            image: Image with weapon boxes drawn
+        """
+        for result in weapon_results:
+            if result['has_weapons'] and result['weapon_detections']:
+                # Get person crop info to translate weapon boxes to full image coordinates
+                person_info = result['person_info']
+                padded_bbox = person_info['padded_bbox']
+                x1_pad, y1_pad, x2_pad, y2_pad = padded_bbox
+                
+                # Draw each weapon detection
+                for weapon_det in result['weapon_detections']:
+                    # Weapon bbox is relative to the person crop
+                    wx1, wy1, wx2, wy2 = weapon_det['bbox']
+                    
+                    # Translate to full image coordinates
+                    full_wx1 = int(x1_pad + wx1)
+                    full_wy1 = int(y1_pad + wy1)
+                    full_wx2 = int(x1_pad + wx2)
+                    full_wy2 = int(y1_pad + wy2)
+                    
+                    # Draw RED box for weapon
+                    weapon_box_color = (0, 0, 255)  # Red for weapon
+                    cv2.rectangle(image, 
+                                (full_wx1, full_wy1), 
+                                (full_wx2, full_wy2), 
+                                weapon_box_color, BOX_THICKNESS)
+                    
+                    # Add weapon label
+                    weapon_label = f"{weapon_det['class']}: {weapon_det['confidence']:.2f}"
+                    cv2.putText(image, weapon_label, 
+                              (full_wx1, full_wy1 - 10), 
+                              cv2.FONT_HERSHEY_SIMPLEX, FONT_SCALE, 
+                              weapon_box_color, FONT_THICKNESS)
+        
+        return image
     
     def save_weapon_detection_results(self, weapon_results, output_dir, base_filename):
         """
@@ -885,22 +933,19 @@ class PeopleDetector:
                 # Load original image for cropping
                 original_image = cv2.imread(image_path)
                 
-                # Detect people
-                image_with_boxes, detections = self.detect_people(image_path)
-                
-                # Save result with bounding boxes to detections folder
+                # Get filename parts early for use in saving
                 filename = os.path.basename(image_path)
                 name, ext = os.path.splitext(filename)
-                output_filename = f"{name}_detected{ext}"
-                detection_path = os.path.join(detections_dir, output_filename)
                 
-                cv2.imwrite(detection_path, image_with_boxes)
+                # Detect people (without drawing boxes yet - we'll draw everything together)
+                image_with_boxes, detections = self.detect_people(image_path, draw_boxes=False)
                 
                 # Extract person crops for weapon detection
                 person_crops = []
                 crops_saved = 0
                 weapons_detected = 0
                 people_with_weapons_count = 0
+                weapon_results = []
                 
                 if detections:
                     # Extract person crops
@@ -915,6 +960,41 @@ class PeopleDetector:
                         #print(f"  -> Checking {len(person_crops)} person crops for weapons...")
                         weapon_results = self.detect_weapons_in_crops(person_crops)
                         weapons_detected, people_with_weapons_count = self.save_weapon_detection_results(weapon_results, output_dir, name)
+                
+                # Now draw ALL boxes on the same image: GREEN for persons, RED for weapons
+                combined_image = original_image.copy()
+                
+                # Draw person boxes in GREEN
+                for detection in detections:
+                    x1, y1, x2, y2 = detection['bbox']
+                    confidence = detection['confidence']
+                    distance_m = detection.get('distance_m', None)
+                    
+                    person_box_color = (0, 255, 0)  # Green for person
+                    cv2.rectangle(combined_image, 
+                                (int(x1), int(y1)), 
+                                (int(x2), int(y2)), 
+                                person_box_color, BOX_THICKNESS)
+                    
+                    # Add confidence label
+                    label = f"Person: {confidence:.2f}"
+                    if distance_m is not None:
+                        label += f" ({distance_m:.1f}m)"
+                    
+                    cv2.putText(combined_image, label, 
+                              (int(x1), int(y1) - 10), 
+                              cv2.FONT_HERSHEY_SIMPLEX, FONT_SCALE, 
+                              person_box_color, FONT_THICKNESS)
+                
+                # Draw weapon boxes in RED (if any detected)
+                if weapon_results:
+                    combined_image = self.draw_weapon_boxes_on_full_image(combined_image, weapon_results)
+                
+                # Save result with all bounding boxes to detections folder
+                output_filename = f"{name}_detected{ext}"
+                detection_path = os.path.join(detections_dir, output_filename)
+                
+                cv2.imwrite(detection_path, combined_image)
                 
                 # Extract distances and (estimated, real) pairs from detections
                 distances = [d['distance_m'] for d in detections if 'distance_m' in d]

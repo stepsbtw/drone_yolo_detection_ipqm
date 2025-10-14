@@ -1,5 +1,5 @@
 """
-Weapon Detection using Roboflow Model
+Weapon Detection using YOLOv8 Model
 Detects weapons in cropped person images.
 """
 
@@ -7,43 +7,37 @@ import cv2
 import os
 import numpy as np
 from pathlib import Path
-from inference import get_model
-import supervision as sv
-from dotenv import load_dotenv
-
-# Load environment variables
-load_dotenv()
+from ultralytics import YOLO
 
 class WeaponDetector:
-    def __init__(self, model_id: str = "weapon-detection-m7qso/1", confidence_threshold: float = 0.5):
+    def __init__(self, model_path: str = None, confidence_threshold: float = 0.2):
         """
-        Initialize the weapon detector with Roboflow model.
+        Initialize the weapon detector with YOLOv8 model.
         
         Args:
-            model_id: Roboflow model ID for weapon detection
+            model_path: Path to the YOLOv8 weapon detection model
             confidence_threshold: Minimum confidence for detections
         """
-        self.model_id = model_id
+        if model_path is None:
+            # Default path to the weapons model
+            current_dir = Path(__file__).parent
+            model_path = current_dir.parent / "models" / "weapons" / "yolov8guns.pt"
+        
+        self.model_path = model_path
         self.confidence_threshold = confidence_threshold
-        
-        # Set up API key from environment
-        self.api_key = os.getenv('ROBOFLOW_API_KEY') or os.getenv('roboflow')
-        if not self.api_key:
-            raise ValueError("ROBOFLOW_API_KEY not found in environment variables (.env file)")
-        
-        # Set the API key in environment for inference library
-        os.environ['ROBOFLOW_API_KEY'] = self.api_key
+        self.weapon_class_id = 0  # Based on the model output, gun class is ID 0
         
         # Load the model
         try:
-            self.model = get_model(model_id=self.model_id)
-            print(f"Loaded weapon detection model: {self.model_id}")
+            self.model = YOLO(str(self.model_path))
+            print(f"Loaded YOLOv8 weapon detection model: {self.model_path}")
+            print(f"Model classes: {self.model.names}")
         except Exception as e:
             raise RuntimeError(f"Failed to load weapon detection model: {e}")
     
     def detect_weapons(self, image):
         """
-        Detect weapons in a single image.
+        Detect weapons in a single image using YOLOv8.
         
         Args:
             image: Input image (numpy array)
@@ -52,46 +46,43 @@ class WeaponDetector:
             tuple: (annotated_image, detections_info, weapon_crops)
         """
         try:
-            # Run inference
-            results = self.model.infer(image)[0]
-            
-            # Convert to supervision format
-            detections = sv.Detections.from_inference(results)
-            
-            # Filter by confidence threshold
-            mask = detections.confidence >= self.confidence_threshold
-            detections = detections[mask]
+            # Run YOLOv8 inference with IOU threshold for better NMS
+            # iou=0.4 means boxes with IoU > 0.4 will be suppressed (keeps only best box)
+            results = self.model(image, conf=self.confidence_threshold, iou=0.4, verbose=False)
             
             # Create annotated image
             annotated_image = image.copy()
             
-            # Extract weapon crops
+            # Extract weapon crops and detection info
             weapon_crops = []
+            detections_info = []
             
-            if len(detections) > 0:
-                # Create supervision annotators
-                bounding_box_annotator = sv.BoxAnnotator(color=sv.Color.RED, thickness=2)
-                label_annotator = sv.LabelAnnotator(color=sv.Color.RED)
+            if len(results) > 0 and len(results[0].boxes) > 0:
+                # Get detections
+                boxes = results[0].boxes
                 
-                # Create labels with confidence scores
-                labels = []
-                for i in range(len(detections)):
-                    class_name = detections.data.get('class_name', ['weapon'])[i] if 'class_name' in detections.data else 'weapon'
-                    confidence = detections.confidence[i]
-                    labels.append(f"{class_name}: {confidence:.2f}")
-                
-                # Annotate the image
-                annotated_image = bounding_box_annotator.annotate(
-                    scene=annotated_image, detections=detections)
-                annotated_image = label_annotator.annotate(
-                    scene=annotated_image, detections=detections, labels=labels)
-                
-                # Extract weapon crops from detections
-                for i in range(len(detections)):
-                    bbox = detections.xyxy[i]
+                for i in range(len(boxes)):
+                    # Get bounding box coordinates (xyxy format)
+                    bbox = boxes.xyxy[i].cpu().numpy()
                     x1, y1, x2, y2 = int(bbox[0]), int(bbox[1]), int(bbox[2]), int(bbox[3])
                     
-                    # Add small padding to weapon bbox
+                    # Get confidence score
+                    confidence = float(boxes.conf[i].cpu().numpy())
+                    
+                    # Get class (should be 'gun' for this model)
+                    class_id = int(boxes.cls[i].cpu().numpy())
+                    class_name = self.model.names[class_id]
+                    
+                    # Draw bounding box and label on annotated image
+                    cv2.rectangle(annotated_image, (x1, y1), (x2, y2), (0, 0, 255), 2)
+                    label = f"{class_name}: {confidence:.2f}"
+                    label_size = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)[0]
+                    cv2.rectangle(annotated_image, (x1, y1 - label_size[1] - 10), 
+                                (x1 + label_size[0], y1), (0, 0, 255), -1)
+                    cv2.putText(annotated_image, label, (x1, y1 - 5), 
+                              cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+                    
+                    # Add small padding to weapon bbox for cropping
                     padding = 5
                     x1_pad = max(0, x1 - padding)
                     y1_pad = max(0, y1 - padding)
@@ -105,22 +96,16 @@ class WeaponDetector:
                         weapon_crops.append({
                             'crop': weapon_crop,
                             'bbox': [x1_pad, y1_pad, x2_pad, y2_pad],
-                            'confidence': float(detections.confidence[i]),
-                            'class': detections.data.get('class_name', ['weapon'])[i] if 'class_name' in detections.data else 'weapon'
+                            'confidence': confidence,
+                            'class': class_name
                         })
-            
-            # Extract detection info
-            detections_info = []
-            for i in range(len(detections)):
-                bbox = detections.xyxy[i]
-                confidence = detections.confidence[i]
-                class_name = detections.data.get('class_name', ['weapon'])[i] if 'class_name' in detections.data else 'weapon'
-                
-                detections_info.append({
-                    'bbox': [int(bbox[0]), int(bbox[1]), int(bbox[2]), int(bbox[3])],
-                    'confidence': float(confidence),
-                    'class': class_name
-                })
+                    
+                    # Store detection info
+                    detections_info.append({
+                        'bbox': [x1, y1, x2, y2],
+                        'confidence': confidence,
+                        'class': class_name
+                    })
             
             return annotated_image, detections_info, weapon_crops
             
@@ -167,10 +152,10 @@ class WeaponDetector:
             results.append(result)
             
             # Log detection results
-            if result['has_weapons']:
-                weapon_count = len(result['weapon_detections'])
-                print(f"  -> Weapons detected in person crop: {weapon_count} weapon(s)")
-            else:
-                print(f"  -> No weapons detected in person crop")
+            # if result['has_weapons']:
+            #     weapon_count = len(result['weapon_detections'])
+            #     print(f"  -> Weapons detected in person crop: {weapon_count} weapon(s)")
+            # else:
+            #     print(f"  -> No weapons detected in person crop")
         
         return results

@@ -25,6 +25,14 @@ class Camera:
 
         focal_length_m = self.focal_length_mm / 1000
         pixel_size_y_m = self.pixel_size_y_mm / 1000
+
+
+        # DCM method (more sophisticated)
+        # Accounts for horizontal position in frame, camera bearing, and FOV
+        new_position_x, new_position_y, lat, lon, bearing, distance = \
+            new.MonocularVision.monocular_vision_detection_method_2(
+                camera, real_height, detected_bbox
+            )
         
-        distance_m = (real_height_m * focal_length_m) / (pixel_height * pixel_size_y_m)
-        return distance_m
+        #distance_m = (real_height_m * focal_length_m) / (pixel_height * pixel_size_y_m)
+        #return distance_m

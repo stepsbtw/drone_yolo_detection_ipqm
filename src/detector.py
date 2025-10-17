@@ -30,7 +30,6 @@ except ImportError as e:
     WEAPON_DETECTION_AVAILABLE = False
     print(f"Warning: Weapon detection not available. Error: {e}")
 
-
 class DetectionStatistics:
     """Class to track comprehensive detection statistics."""
     

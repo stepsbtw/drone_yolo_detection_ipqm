@@ -1,6 +1,5 @@
 """
-Weapon Detection using YOLOv8 Model
-Detects weapons in cropped person images.
+deteccao de armas usando yolov8
 """
 
 import cv2
@@ -11,23 +10,14 @@ from ultralytics import YOLO
 
 class WeaponDetector:
     def __init__(self, model_path: str = None, confidence_threshold: float = 0.2):
-        """
-        Initialize the weapon detector with YOLOv8 model.
-        
-        Args:
-            model_path: Path to the YOLOv8 weapon detection model
-            confidence_threshold: Minimum confidence for detections
-        """
         if model_path is None:
-            # Default path to the weapons model
             current_dir = Path(__file__).parent
             model_path = current_dir.parent / "models" / "weapons" / "yolov8guns.pt"
         
         self.model_path = model_path
         self.confidence_threshold = confidence_threshold
-        self.weapon_class_id = 0  # Based on the model output, gun class is ID 0
+        self.weapon_class_id = 0
         
-        # Load the model
         try:
             self.model = YOLO(str(self.model_path))
             print(f"Loaded YOLOv8 weapon detection model: {self.model_path}")
@@ -35,45 +25,36 @@ class WeaponDetector:
         except Exception as e:
             raise RuntimeError(f"Failed to load weapon detection model: {e}")
     
-    def detect_weapons(self, image):
-        """
-        Detect weapons in a single image using YOLOv8.
-        
-        Args:
-            image: Input image (numpy array)
-            
-        Returns:
-            tuple: (annotated_image, detections_info, weapon_crops)
-        """
+    def detect_weapons(self, image, person_bbox_offset=None):
+        """detecta armas na imagem"""
         try:
-            # Run YOLOv8 inference with IOU threshold for better NMS
-            # iou=0.4 means boxes with IoU > 0.4 will be suppressed (keeps only best box)
             results = self.model(image, conf=self.confidence_threshold, iou=0.4, verbose=False)
             
-            # Create annotated image
             annotated_image = image.copy()
-            
-            # Extract weapon crops and detection info
             weapon_crops = []
             detections_info = []
             
             if len(results) > 0 and len(results[0].boxes) > 0:
-                # Get detections
                 boxes = results[0].boxes
                 
                 for i in range(len(boxes)):
-                    # Get bounding box coordinates (xyxy format)
                     bbox = boxes.xyxy[i].cpu().numpy()
                     x1, y1, x2, y2 = int(bbox[0]), int(bbox[1]), int(bbox[2]), int(bbox[3])
                     
-                    # Get confidence score
-                    confidence = float(boxes.conf[i].cpu().numpy())
+                    # converte para coordenadas absolutas do frame se offset fornecido
+                    if person_bbox_offset is not None:
+                        x_offset, y_offset = person_bbox_offset
+                        x1_abs = x1 + x_offset
+                        y1_abs = y1 + y_offset
+                        x2_abs = x2 + x_offset
+                        y2_abs = y2 + y_offset
+                    else:
+                        x1_abs, y1_abs, x2_abs, y2_abs = x1, y1, x2, y2
                     
-                    # Get class (should be 'gun' for this model)
+                    confidence = float(boxes.conf[i].cpu().numpy())
                     class_id = int(boxes.cls[i].cpu().numpy())
                     class_name = self.model.names[class_id]
                     
-                    # Draw bounding box and label on annotated image
                     cv2.rectangle(annotated_image, (x1, y1), (x2, y2), (0, 0, 255), 2)
                     label = f"{class_name}: {confidence:.2f}"
                     label_size = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)[0]
@@ -82,17 +63,15 @@ class WeaponDetector:
                     cv2.putText(annotated_image, label, (x1, y1 - 5), 
                               cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
                     
-                    # Add small padding to weapon bbox for cropping
                     padding = 5
                     x1_pad = max(0, x1 - padding)
                     y1_pad = max(0, y1 - padding)
                     x2_pad = min(image.shape[1], x2 + padding)
                     y2_pad = min(image.shape[0], y2 + padding)
                     
-                    # Extract weapon crop
                     weapon_crop = image[y1_pad:y2_pad, x1_pad:x2_pad]
                     
-                    if weapon_crop.size > 0:  # Ensure crop is valid
+                    if weapon_crop.size > 0:
                         weapon_crops.append({
                             'crop': weapon_crop,
                             'bbox': [x1_pad, y1_pad, x2_pad, y2_pad],
@@ -100,9 +79,9 @@ class WeaponDetector:
                             'class': class_name
                         })
                     
-                    # Store detection info
                     detections_info.append({
-                        'bbox': [x1, y1, x2, y2],
+                        'bbox': [x1_abs, y1_abs, x2_abs, y2_abs],
+                        'bbox_crop': [x1, y1, x2, y2],
                         'confidence': confidence,
                         'class': class_name
                     })

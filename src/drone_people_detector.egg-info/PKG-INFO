@@ -1,3 +1,29 @@
+Metadata-Version: 2.4
+Name: drone_people_detector
+Version: 1.0.0
+Summary: Biblioteca para detecção de pessoas e armas em vídeos de drone usando YOLO
+License: MIT
+Project-URL: Homepage, https://github.com/your-org/drone-people-detector
+Project-URL: Issues, https://github.com/your-org/drone-people-detector/issues
+Classifier: Programming Language :: Python :: 3
+Classifier: Programming Language :: Python :: 3.9
+Classifier: Programming Language :: Python :: 3.10
+Classifier: Programming Language :: Python :: 3.11
+Classifier: Operating System :: OS Independent
+Classifier: Intended Audience :: Developers
+Classifier: Topic :: Scientific/Engineering :: Artificial Intelligence
+Classifier: Topic :: Scientific/Engineering :: Image Recognition
+Requires-Python: >=3.9
+Description-Content-Type: text/markdown
+Requires-Dist: opencv-python-headless>=4.5.0
+Requires-Dist: numpy>=1.20.0
+Requires-Dist: ultralytics>=8.0.0
+Requires-Dist: torch>=1.11.0
+Requires-Dist: torchvision>=0.12.0
+Requires-Dist: Pillow>=8.0.0
+Requires-Dist: filterpy>=1.4.5
+Requires-Dist: pyproj>=3.0.0
+
 # Drone People Detector - Library
 
 A Python library for detecting people and weapons in drone footage using YOLO models with Kalman filter tracking.

@@ -5,12 +5,13 @@ from filterpy.common import Q_discrete_white_noise
 from scipy.linalg import block_diag
 
 class Kinematic:
+    """filtro de kalman para rastreamento 2d com velocidade"""
 
     SIMULATED_DT = None
     
     def __init__(self, measurement_noise, process_noise, initial_gain):
-        self.position = (0,0)
-        self.velocity = (0,0)
+        self.position = (0, 0)
+        self.velocity = (0, 0)
         self.timestamp = datetime.now()
         self.error = None
         self.delta_t = 0
@@ -19,8 +20,8 @@ class Kinematic:
         self.initial_gain = initial_gain
         self.kf = self.init_kalman_filter()
 
-
     def init_kalman_filter(self):
+        """inicializa filtro de kalman com modelo de velocidade constante"""
         kf = KalmanFilter(dim_x=4, dim_z=2)
         kf.alpha = 1
         kf.x = None
@@ -32,15 +33,14 @@ class Kinematic:
                          [0., 0., 1., 0.]])
         kf.P *= np.diag(self.initial_gain)
         kf.R = np.array([[self.measurement_noise, 0],
-                         [0, self.measurement_noise]
-                         ])
+                         [0, self.measurement_noise]])
         
         q = Q_discrete_white_noise(dim=2, dt=self.delta_t, var=self.process_noise)
         Kinematic.Q = block_diag(q, q)
         return kf
-
    
     def apply_kalman_filter(self, x, y):
+        """aplica predicao e atualizacao do filtro de kalman"""
         if self.kf.x is None:
             self.kf.x = np.array([1., 0., 1., 0.])
         self.kf.predict()
@@ -52,6 +52,7 @@ class Kinematic:
         return x, y, vx, vy
        
     def update(self, estimated_x, estimated_y):
+        """atualiza posicao e velocidade com nova medicao"""
         timestamp_now = datetime.now()
         if Kinematic.SIMULATED_DT is None:
             self.delta_t = (timestamp_now - self.timestamp).microseconds / 1e+6
@@ -65,4 +66,4 @@ class Kinematic:
         self.position = (x, y)
         self.velocity = (vx * 1.94384, vy * 1.94384)
         self.timestamp = timestamp_now
-        
+

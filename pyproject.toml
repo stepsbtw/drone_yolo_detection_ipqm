@@ -1,0 +1,44 @@
+[build-system]
+requires = ["setuptools >= 77.0.3"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "drone_people_detector"
+version = "1.0.0"
+description = "Biblioteca para detecção de pessoas e armas em vídeos de drone usando YOLO"
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = [
+    "opencv-python-headless>=4.5.0",
+    "numpy>=1.20.0",
+    "ultralytics>=8.0.0",
+    "torch>=1.11.0",
+    "torchvision>=0.12.0",
+    "Pillow>=8.0.0",
+    "filterpy>=1.4.5",
+    "pyproj>=3.0.0",
+]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Operating System :: OS Independent",
+    "Intended Audience :: Developers",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Scientific/Engineering :: Image Recognition",
+]
+license = {text = "MIT"}
+
+[project.urls]
+Homepage = "https://github.com/your-org/drone-people-detector"
+Issues = "https://github.com/your-org/drone-people-detector/issues"
+
+[tool.setuptools]
+include-package-data = true
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+"drone_people_detector" = ["*.pt", "*.yaml"]

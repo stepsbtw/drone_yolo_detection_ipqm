@@ -9,6 +9,7 @@ src/drone_people_detector.egg-info/requires.txt
 src/drone_people_detector.egg-info/top_level.txt
 src/drone_people_detector/core/enhanced_detector.py
 src/drone_people_detector/core/estimation.py
+src/drone_people_detector/core/viewer.py
 src/drone_people_detector/core/weapon_detector.py
 src/new/PersonTrack.py
 src/new/camera.py

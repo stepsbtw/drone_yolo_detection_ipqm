@@ -103,6 +103,11 @@ def _extract_track_data(track):
             'has_weapon': has_weapon,
             'weapon_confidence': weapon_conf,
             'distance': track.distance if hasattr(track, 'distance') else None,
+            'bearing': track.bearing if hasattr(track, 'bearing') else None,
+            'lat': track.lat if hasattr(track, 'lat') else None,
+            'lon': track.lon if hasattr(track, 'lon') else None,
+            'x_utm': track.x_utm if hasattr(track, 'x_utm') else None,
+            'y_utm': track.y_utm if hasattr(track, 'y_utm') else None,
             'weapon_bboxes': track.weapon_bboxes if hasattr(track, 'weapon_bboxes') else [],
             'lost': track.lost
         }
@@ -119,6 +124,11 @@ def _extract_track_data(track):
             'has_weapon': track.get('has_weapon', False),
             'weapon_confidence': track.get('weapon_confidence', 0.0),
             'distance': track.get('distance'),
+            'bearing': track.get('bearing'),
+            'lat': track.get('lat'),
+            'lon': track.get('lon'),
+            'x_utm': track.get('x_utm'),
+            'y_utm': track.get('y_utm'),
             'weapon_bboxes': track.get('weapon_bboxes', []),
             'lost': track.get('lost', False)
         }
@@ -130,6 +140,11 @@ def _draw_person_overlay(image, track_data):
     bbox = track_data['bbox']
     track_id = track_data['track_id']
     distance = track_data['distance']
+    bearing = track_data['bearing']
+    lat = track_data['lat']
+    lon = track_data['lon']
+    x_utm = track_data['x_utm']
+    y_utm = track_data['y_utm']
     has_weapon = track_data['has_weapon']
     weapon_conf = track_data['weapon_confidence']
     
@@ -152,8 +167,15 @@ def _draw_person_overlay(image, track_data):
     # titulo
     text_title = f"ID: {track_id}"
     
-    # calcula largura do retangulo
-    rect_width = max((font_size * len(text_title) * 0.6) + 20, min_rect_width)
+    # conta quantas linhas precisamos
+    num_lines = 1  # titulo
+    if distance is not None: num_lines += 1
+    if bearing is not None: num_lines += 1
+    if lat is not None and lon is not None: num_lines += 1
+    if has_weapon: num_lines += 1
+    
+    # calcula largura do retangulo (aumentada para caber mais info)
+    rect_width = max((font_size * 20 * 0.6) + 20, min_rect_width)
     xmax = int(xmin + rect_width)
     ymax = int(y1)
     
@@ -162,9 +184,8 @@ def _draw_person_overlay(image, track_data):
     xcenter_dst = int(x1 + w/2)
     ycenter = int(y1 + h/2)
     
-    # altura do info box (4 linhas de texto)
-    num_lines = 3 if has_weapon else 2
-    ymin = int(y1 - font_size * (num_lines + 2))
+    # altura do info box
+    ymin = int(y1 - font_size * (num_lines + 1))
     
     # desenha retangulo de fundo preto
     image = cv2.rectangle(image, (xmin, ymin), (xmax, ymax), color_rect_bg, -1)
@@ -176,18 +197,35 @@ def _draw_person_overlay(image, track_data):
     image = cv2.circle(image, (xcenter_dst, ycenter), 8, color_pin, -1)
     
     # textos
+    line_y = ymin + 5
+    
     # titulo (laranja)
-    text_values.append([text_title, xmin + 10, ymin + 5, color_text_title, False])
+    text_values.append([text_title, xmin + 10, line_y, color_text_title, False])
+    line_y += font_size + 3
     
     # distancia (branco)
     if distance is not None:
         text_dist = f"Dist: {distance:.1f}m"
-        text_values.append([text_dist, xmin + 10, ymin + font_size + 8, color_text_body, False])
+        text_values.append([text_dist, xmin + 10, line_y, color_text_body, False])
+        line_y += font_size + 3
+    
+    # bearing (branco)
+    if bearing is not None:
+        text_bearing = f"Bearing: {bearing:.1f}°"
+        text_values.append([text_bearing, xmin + 10, line_y, color_text_body, False])
+        line_y += font_size + 3
+    
+    # coordenadas geograficas (branco)
+    if lat is not None and lon is not None:
+        text_geo = f"Lat:{lat:.6f} Lon:{lon:.6f}"
+        text_values.append([text_geo, xmin + 10, line_y, color_text_body, False])
+        line_y += font_size + 3
     
     # arma (vermelho claro se detectada)
     if has_weapon:
         text_weapon = f"ARMA {int(weapon_conf*100)}%"
-        text_values.append([text_weapon, xmin + 10, ymin + font_size * 2 + 11, color_text_weapon, False])
+        text_values.append([text_weapon, xmin + 10, line_y, color_text_weapon, False])
+        line_y += font_size + 3
     
     return image, text_values
 

@@ -13,6 +13,7 @@ except ImportError:
 
 from drone_people_detector.core.camera import Camera
 from drone_people_detector.core.weapon_detector import WeaponDetector
+from drone_people_detector.core.monocular_vision_submodule import MonocularVision
 
 
 class DetectionStatistics:
@@ -68,6 +69,8 @@ class Detector:
         weapon_bboxes = []
         distances = []
         
+        position_data_list = []
+        
         for result in results:
             for detection in result.boxes:
                 bbox = detection.xyxy[0].cpu().numpy()
@@ -96,25 +99,38 @@ class Detector:
                 weapon_bboxes.append(weapon_bbox_list)
                 
                 distance = None
+                position_data = None
                 if camera and h > 0:
-                    # tenta usar dcm se disponivel, senao usa pinhole simples
-                    if hasattr(camera, 'hfov') and camera.hfov is not None:
-                        try:
-                            _, _, lat, lon, bearing, distance = camera.estimate_distance_dcm(
-                                person_bbox, real_height_m=1.7
-                            )
-                        except:
-                            distance = camera.estimate_distance(h)
-                    else:
-                        distance = camera.estimate_distance(h)
+                    # Estimate distance using monocular vision method
+                    # Assuming average person height of 1.7m
+                    AVERAGE_PERSON_HEIGHT_M = 1.7
+                    detected_bbox = [x1, y1, w, h]  # [x, y, width, height]
+                    
+                    # Use monocular_vision_detection_method_2 for complete position estimation
+                    # Returns: (x_utm, y_utm, lat, lon, bearing, distance)
+                    x_utm, y_utm, lat, lon, bearing, distance = MonocularVision.monocular_vision_detection_method_2(
+                        camera, AVERAGE_PERSON_HEIGHT_M, detected_bbox
+                    )
+                    
+                    # Store position data
+                    position_data = {
+                        'x_utm': x_utm,
+                        'y_utm': y_utm,
+                        'lat': lat,
+                        'lon': lon,
+                        'bearing': bearing
+                    }
+                
                 distances.append(distance)
+                position_data_list.append(position_data)
         
         if self.enable_tracking:
             tracks = self.track_manager.update(
                 detections, 
                 weapon_detections, 
                 distances,
-                weapon_bboxes if self.show_weapon_bbox else None
+                weapon_bboxes if self.show_weapon_bbox else None,
+                position_data_list
             )
         else:
             tracks = []
@@ -122,7 +138,8 @@ class Detector:
                 track = PersonTrack(track_id=f"T{i}")
                 has_weapon, weapon_conf = weapon_detections[i]
                 w_bboxes = weapon_bboxes[i] if self.show_weapon_bbox else []
-                track.update(det, has_weapon, weapon_conf, distances[i], w_bboxes)
+                pos_data = position_data_list[i] if i < len(position_data_list) else None
+                track.update(det, has_weapon, weapon_conf, distances[i], w_bboxes, pos_data)
                 tracks.append(track)
         
         annotated_frame = self._annotate_frame(frame.copy(), tracks)
@@ -166,6 +183,15 @@ class Detector:
             
             if track.distance:
                 label_lines.append(f"Dist: {track.distance:.1f}m")
+            
+            # adiciona bearing se disponivel
+            if track.bearing is not None:
+                label_lines.append(f"Bear: {track.bearing:.0f}°")
+            
+            # adiciona coordenadas geograficas se disponiveis
+            if track.lat is not None and track.lon is not None:
+                label_lines.append(f"Lat: {track.lat:.6f}")
+                label_lines.append(f"Lon: {track.lon:.6f}")
             
             # mostra status de arma apenas se nao houver bbox separada
             if track.has_weapon() and not (self.show_weapon_bbox and track.weapon_bboxes):

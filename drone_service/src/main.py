@@ -14,6 +14,7 @@ import math
 
 # Use the installed library
 from drone_people_detector.core.camera import Camera
+from drone_people_detector.core.monocular_vision_submodule import MonocularVision
 from ultralytics import YOLO
 
 
@@ -100,11 +101,19 @@ class DistanceEstimationTester:
                     if confidence >= self.confidence_threshold:
                         people_detected += 1
                         
-                        # Calculate pixel height
-                        pixel_height = y2 - y1
+                        # Calculate bounding box
+                        w, h = x2 - x1, y2 - y1
+                        detected_bbox = [x1, y1, w, h]  # [x, y, width, height]
                         
-                        # Use simple distance estimation
-                        distance_est = self.camera.estimate_distance(pixel_height, real_height_m=1.7)
+                        # Estimate distance using monocular vision method
+                        # Assuming average person height of 1.7m
+                        AVERAGE_PERSON_HEIGHT_M = 1.7
+                        
+                        # Use monocular_vision_detection_method_2 for better accuracy
+                        # Returns: (x_utm, y_utm, lat, lon, bearing, distance)
+                        _, _, _, _, _, distance_est = MonocularVision.monocular_vision_detection_method_2(
+                            self.camera, AVERAGE_PERSON_HEIGHT_M, detected_bbox
+                        )
                         
                         # Store pairs for RMSE calculation
                         if real_distance is not None:

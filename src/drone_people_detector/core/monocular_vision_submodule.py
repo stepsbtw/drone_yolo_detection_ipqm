@@ -30,6 +30,11 @@ class MonocularVision:
         """
         metodo 2 (dcm): calculo considerando posicao no frame e hfov
         retorna: (x_utm, y_utm, lat, lon, bearing, distance)
+        
+        Args:
+            camera: Camera object with focal_length_px and sensor specs
+            real_height: Real height of object in meters (e.g., 1.7m for person)
+            detected_bbox: [x, y, width, height] in pixels
         """
         pixel_width = detected_bbox[2]
         pixel_height = detected_bbox[3]
@@ -40,15 +45,20 @@ class MonocularVision:
         fator = (x_center_pixel - x_center_frame) / (camera.sensor_width_resolution / 2)
         diff_degrees = fator * (camera.hfov / 2)
         
-        # ajusta bearing baseado no offset
-        new_bearing = (camera.bearing + diff_degrees) % 360
+        # ajusta bearing baseado no offset (usa bearing da camera se disponivel, senao 0)
+        camera_bearing = getattr(camera, 'bearing', 0) or 0
+        new_bearing = (camera_bearing + diff_degrees) % 360
         
         # calcula distancia usando focal length em pixels
-        new_distance = ((real_height * camera.focal_length_px) / pixel_height)
-        new_distance = (new_distance / 1000)  # mm to m
+        # Distance = (real_height * focal_length_px) / pixel_height
+        # If real_height is in meters, result is in meters
+        new_distance = (real_height * camera.focal_length_px) / pixel_height
         
-        # converte para coordenadas utm e geograficas
-        new_position_x, new_position_y = Converter.polar_to_xy(camera.x, camera.y, new_bearing, new_distance)
+        # converte para coordenadas utm e geograficas (se camera tiver posicao)
+        camera_x = getattr(camera, 'x', 0) or 0
+        camera_y = getattr(camera, 'y', 0) or 0
+        
+        new_position_x, new_position_y = Converter.polar_to_xy(camera_x, camera_y, new_bearing, new_distance)
         lat, lon = Converter.xy_to_geo(new_position_x, new_position_y)
         
         return new_position_x, new_position_y, lat, lon, new_bearing, new_distance

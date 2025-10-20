@@ -85,15 +85,29 @@ class PersonTrack:
         self.distance = None
         self.distance_history = []
         
+        # posicao geografica
         self.lat = None
         self.lon = None
         self.bearing = None
+        self.x_utm = None
+        self.y_utm = None
         
         self.velocity_x = 0.0
         self.velocity_y = 0.0
     
-    def update(self, detected_bbox, weapon_detected=False, weapon_confidence=0.0, distance=None, weapon_bboxes=None):
-        """atualiza track com nova deteccao"""
+    def update(self, detected_bbox, weapon_detected=False, weapon_confidence=0.0, distance=None, weapon_bboxes=None, 
+               position_data=None):
+        """
+        atualiza track com nova deteccao
+        
+        Args:
+            detected_bbox: [x, y, w, h] bounding box
+            weapon_detected: bool indicating weapon presence
+            weapon_confidence: confidence score for weapon
+            distance: estimated distance in meters
+            weapon_bboxes: list of weapon bounding boxes
+            position_data: dict with 'x_utm', 'y_utm', 'lat', 'lon', 'bearing' (optional)
+        """
         self.lost = False
         self.frames_since_update = 0
         self.frames_alive += 1
@@ -130,6 +144,14 @@ class PersonTrack:
             self.distance_history.append(distance)
             if len(self.distance_history) > 30:
                 self.distance_history.pop(0)
+        
+        # atualiza posicao geografica se disponivel
+        if position_data is not None:
+            self.lat = position_data.get('lat')
+            self.lon = position_data.get('lon')
+            self.bearing = position_data.get('bearing')
+            self.x_utm = position_data.get('x_utm')
+            self.y_utm = position_data.get('y_utm')
         
         self.weapon_bboxes = weapon_bboxes if weapon_bboxes is not None else []
     
@@ -249,8 +271,17 @@ class TrackManager:
         self.next_id = 0
         self.iou_threshold = iou_threshold
     
-    def update(self, detections, weapon_detections=None, distances=None, weapon_bboxes_list=None):
-        """atualiza tracks com novas deteccoes"""
+    def update(self, detections, weapon_detections=None, distances=None, weapon_bboxes_list=None, position_data_list=None):
+        """
+        atualiza tracks com novas deteccoes
+        
+        Args:
+            detections: list of [x, y, w, h] bounding boxes
+            weapon_detections: list of (has_weapon, confidence) tuples
+            distances: list of distances in meters
+            weapon_bboxes_list: list of weapon bounding boxes for each person
+            position_data_list: list of position data dicts (x_utm, y_utm, lat, lon, bearing)
+        """
         if weapon_detections is None:
             weapon_detections = [(False, 0.0)] * len(detections)
         
@@ -259,6 +290,9 @@ class TrackManager:
         
         if weapon_bboxes_list is None:
             weapon_bboxes_list = [[] for _ in detections]
+        
+        if position_data_list is None:
+            position_data_list = [None] * len(detections)
         
         matched_tracks = set()
         
@@ -279,16 +313,17 @@ class TrackManager:
             has_weapon, weapon_conf = weapon_detections[i]
             distance = distances[i]
             weapon_bboxes = weapon_bboxes_list[i]
+            position_data = position_data_list[i]
             
             if best_track:
-                best_track.update(detection, has_weapon, weapon_conf, distance, weapon_bboxes)
+                best_track.update(detection, has_weapon, weapon_conf, distance, weapon_bboxes, position_data)
                 matched_tracks.add(best_track.id)
             else:
                 # cria novo track
                 track_id = f"P{self.next_id:03d}"
                 self.next_id += 1
                 new_track = PersonTrack(source="drone", track_id=track_id)
-                new_track.update(detection, has_weapon, weapon_conf, distance, weapon_bboxes)
+                new_track.update(detection, has_weapon, weapon_conf, distance, weapon_bboxes, position_data)
                 self.tracks[track_id] = new_track
         
         # marca tracks nao associados como perdidos

@@ -108,6 +108,14 @@ class Camera:
             self.lat = lat
             self.lon = lon
             
+            # Calcular coordenadas UTM se lat/lon fornecidas
+            if lat is not None and lon is not None:
+                self.x, self.y = Converter.geo_to_xy(lat, lon)
+            else:
+                # Valores default se nao fornecidos (origem)
+                self.x = 0.0
+                self.y = 0.0
+            
             # Calcular focal length em pixels baseado no HFOV efetivo
             self.focal_length_px_from_hfov = (image_width_px / 2) / np.tan(np.radians(self.effective_hfov / 2))
             
@@ -164,93 +172,6 @@ class Camera:
             print(f"⚠️  Warning: Zoom {self.zoom_multiplier}x excede zoom lossless ({self.ZOOM_LOSSLESS_MAX}x)")
         
         print(f"Zoom atualizado: {self.zoom_multiplier}x | Effective HFOV: {self.effective_hfov:.2f}°")
-    
-    def estimate_distance(self, pixel_height, real_height_m=1.7):
-        """
-        Metodo pinhole simples para estimativa de distancia
-        
-        Args:
-            pixel_height: Altura do objeto detectado em pixels
-            real_height_m: Altura real do objeto em metros (default: 1.7m para pessoa)
-            
-        Returns:
-            distance_m: Distancia estimada em metros
-        """
-        if pixel_height <= 0:
-            raise ValueError(f"pixel_height deve ser positivo, recebido: {pixel_height}")
-        
-        focal_length_m = self.focal_length_mm / 1000
-        pixel_size_y_m = self.pixel_size_y_mm / 1000
-        
-        distance_m = (real_height_m * focal_length_m) / (pixel_height * pixel_size_y_m)
-        
-        # Validacao baseada nas especificacoes
-        if distance_m < self.MIN_FOCUS_DISTANCE_M:
-            print(f"⚠️  Warning: Distancia estimada ({distance_m:.2f}m) abaixo do minimo de foco ({self.MIN_FOCUS_DISTANCE_M}m)")
-        
-        return distance_m
-    
-    def estimate_distance_with_hfov(self, pixel_height, real_height_m=1.7):
-        """
-        Metodo alternativo usando focal length calculado a partir do HFOV
-        Recomendado para maior precisao com as specs oficiais
-        
-        Args:
-            pixel_height: Altura do objeto detectado em pixels
-            real_height_m: Altura real do objeto em metros (default: 1.7m para pessoa)
-            
-        Returns:
-            distance_m: Distancia estimada em metros
-        """
-        if pixel_height <= 0:
-            raise ValueError(f"pixel_height deve ser positivo, recebido: {pixel_height}")
-        
-        # Usar focal length calculado a partir do HFOV efetivo
-        distance_m = (real_height_m * self.focal_length_px_from_hfov) / pixel_height
-        
-        # Validacao baseada nas especificacoes
-        if distance_m < self.MIN_FOCUS_DISTANCE_M:
-            print(f"⚠️  Warning: Distancia estimada ({distance_m:.2f}m) abaixo do minimo de foco ({self.MIN_FOCUS_DISTANCE_M}m)")
-        
-        return distance_m
-    
-
-    
-
-    
-
-    
-    def estimate_distance_dcm(self, detected_bbox, real_height_m=1.7):
-        """
-        Metodo DCM (Distance Calculation Method)
-        Considera posicao horizontal no frame, bearing e HFOV
-        
-        Args:
-            detected_bbox: Bounding box da deteccao [x, y, width, height]
-            real_height_m: Altura real do objeto em metros (default: 1.7m)
-            
-        Returns:
-            tuple: (x, y, lat, lon, bearing, distance)
-                - x, y: Posicao UTM estimada
-                - lat, lon: Coordenadas geograficas estimadas
-                - bearing: Bearing ajustado para o objeto
-                - distance: Distancia estimada em metros
-        """
-        if self.hfov is None:
-            raise ValueError("HFOV necessario para DCM. Use hfov=79.0 para Autel EVO II Dual V2")
-        
-        try:
-            from drone_people_detector.core.monocular_vision_submodule import MonocularVision
-            return MonocularVision.monocular_vision_detection_method_2(
-                self, real_height_m, detected_bbox
-            )
-        except ImportError as e:
-            print(f"⚠️  Warning: Modulo MonocularVision nao disponivel: {e}")
-            print("   Usando fallback para metodo simples...")
-            # Fallback para metodo simples se modulo nao disponivel
-            pixel_height = detected_bbox[3]
-            distance = self.estimate_distance_with_hfov(pixel_height, real_height_m)
-            return None, None, None, None, self.bearing, distance
     
     def get_specs_dict(self):
         """

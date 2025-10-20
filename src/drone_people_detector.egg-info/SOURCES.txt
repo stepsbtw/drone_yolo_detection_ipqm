@@ -10,7 +10,6 @@ src/drone_people_detector.egg-info/top_level.txt
 src/drone_people_detector/core/camera.py
 src/drone_people_detector/core/converter.py
 src/drone_people_detector/core/detector.py
-src/drone_people_detector/core/estimation.py
 src/drone_people_detector/core/estimation_submodule.py
 src/drone_people_detector/core/monocular_vision_submodule.py
 src/drone_people_detector/core/tracks.py

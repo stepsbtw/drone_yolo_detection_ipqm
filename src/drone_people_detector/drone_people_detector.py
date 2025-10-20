@@ -32,8 +32,8 @@ class DronePeopleDetector:
             sensor_height_mm=getattr(config.camera, 'sensor_height_mm', None),  # Uses default 4.55mm
             focal_35mm_mm=getattr(config.camera, 'focal_35mm_mm', None),  # Uses default 25.6mm
             bearing=getattr(config.camera, 'bearing', 0),
-            lat=getattr(config.camera, 'lat', None),
-            lon=getattr(config.camera, 'lon', None),
+            lat=getattr(config.camera, 'latitude', getattr(config.camera, 'lat', None)),
+            lon=getattr(config.camera, 'longitude', getattr(config.camera, 'lon', None)),
             zoom=getattr(config.camera, 'zoom', 1.0)
         )
         

@@ -11,6 +11,7 @@ import logging
 from pathlib import Path
 from ultralytics import YOLO
 from estimation import Camera
+from drone_people_detector.core.monocular_vision_submodule import MonocularVision
 
 try:
     from config import *
@@ -606,7 +607,17 @@ class PeopleDetector:
                         distance_m = None
                         if self.camera:
                             try:
-                                distance_m = self.camera.estimate_distance(person_height_px)
+                                # Estimate distance using monocular vision method
+                                # Assuming average person height of 1.7m
+                                AVERAGE_PERSON_HEIGHT_M = 1.7
+                                person_width_px = x2 - x1
+                                detected_bbox = [x1, y1, person_width_px, person_height_px]  # [x, y, width, height]
+                                
+                                # Use monocular_vision_detection_method_2 for better accuracy
+                                # Returns: (x_utm, y_utm, lat, lon, bearing, distance)
+                                _, _, _, _, _, distance_m = MonocularVision.monocular_vision_detection_method_2(
+                                    self.camera, AVERAGE_PERSON_HEIGHT_M, detected_bbox
+                                )
                                 
                                 # Extract real distance and camera height from file path
                                 image_name = os.path.basename(image_path)

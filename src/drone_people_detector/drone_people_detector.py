@@ -11,13 +11,9 @@ import numpy as np
 from typing import Any, Tuple, Optional, List, Dict
 from dotenv import load_dotenv
 
-# Adiciona o diretório do módulo ao sys.path
-module_path = Path(__file__).resolve().parent
-sys.path.insert(0, str(module_path))
-
-from core.enhanced_detector import EnhancedPeopleDetector
-from core.estimation import Camera
-from core.viewer import _draw_bbox, add_frame_info
+from drone_people_detector.core.detector import Detector
+from drone_people_detector.core.camera import Camera
+from drone_people_detector.core.viewer import _draw_bbox, add_frame_info
 
 logger = logging.getLogger(__name__)
 
@@ -28,17 +24,21 @@ class DronePeopleDetector:
     def __init__(self, config: Any):
         self.config = config
         
-        # inicializa camera
+        # inicializa camera (Autel EVO II Dual V2)
         self.camera = Camera(
-            sensor_width_mm=getattr(config.camera, 'sensor_width_mm', 6.4),
-            sensor_height_mm=getattr(config.camera, 'sensor_height_mm', 4.8),
-            focal_35mm_mm=getattr(config.camera, 'focal_35mm_mm', 25.6),
             image_width_px=getattr(config.camera, 'image_width_px', 1920),
-            image_height_px=getattr(config.camera, 'image_height_px', 1080)
+            image_height_px=getattr(config.camera, 'image_height_px', 1080),
+            sensor_width_mm=getattr(config.camera, 'sensor_width_mm', None),  # Uses default 6.17mm
+            sensor_height_mm=getattr(config.camera, 'sensor_height_mm', None),  # Uses default 4.55mm
+            focal_35mm_mm=getattr(config.camera, 'focal_35mm_mm', None),  # Uses default 25.6mm
+            bearing=getattr(config.camera, 'bearing', 0),
+            lat=getattr(config.camera, 'lat', None),
+            lon=getattr(config.camera, 'lon', None),
+            zoom=getattr(config.camera, 'zoom', 1.0)
         )
         
         # Initialize detector
-        self.detector = EnhancedPeopleDetector(
+        self.detector = Detector(
             model_path=getattr(config.detection, 'model_path_people', 'models/people/yolo11n.pt'),
             confidence_threshold=getattr(config.detection, 'person_confidence', 0.5),
             enable_tracking=getattr(config.detection, 'enable_tracking', True),
@@ -50,7 +50,7 @@ class DronePeopleDetector:
         
         # Video capture (if video path provided)
         self.cap = None
-        if hasattr(config, 'video') and hasattr(config.video, 'input_path'):
+        if hasattr(config, 'video') and hasattr(config.video, 'input_path') and config.video.input_path is not None:
             self.cap = cv2.VideoCapture(config.video.input_path)
             if not self.cap.isOpened():
                 raise RuntimeError(f"Failed to open video: {config.video.input_path}")
@@ -58,16 +58,21 @@ class DronePeopleDetector:
         
         self._current_frame = None
         self._current_tracks = None
-        
+    
     def get_camera(self) -> Camera:
+        """retorna instancia da camera"""
         return self.camera
     
     def get_predict(self) -> Tuple[Optional[np.ndarray], Optional[List[Dict]]]:
-        """retorna proximo frame e predicoes"""
+        """
+        le proximo frame e retorna frame original + tracks
+        anotacao deve ser feita separadamente com draw_bbox()
+        """
         if self.cap is None:
             logger.warning("No video capture initialized")
             return None, None
         
+        # le frame
         ret, frame = self.cap.read()
         if not ret:
             logger.info("End of video or failed to read frame")
@@ -79,38 +84,12 @@ class DronePeopleDetector:
             self.camera
         )
         
+        # armazena frame original e tracks
         self._current_frame = frame.copy()
         self._current_tracks = tracks
         
-        
-        return frame, tracks
-    
-    def get_camera(self) -> Camera:
-        return self.camera
-    
-    def get_predict(self) -> Tuple[Optional[np.ndarray], Optional[List[Dict]]]:
-        if self.cap is None:
-            logger.warning("No video capture initialized")
-            return None, None
-        
-        # Read frame
-        ret, frame = self.cap.read()
-        if not ret:
-            logger.info("End of video or failed to read frame")
-            return None, None
-        
-        # Process frame
-        annotated_frame, tracks = self.detector.process_frame_with_tracking(
-            frame, 
-            self.camera
-        )
-        
-        # Store for later use
-        self._current_frame = frame.copy()  # Original frame
-        self._current_tracks = tracks
-        
-        # Return original frame (not annotated) and tracks
-        # Annotation is done separately in draw_bbox()
+        # retorna frame ORIGINAL (nao anotado) e tracks
+        # anotacao sera feita separadamente em draw_bbox()
         return frame, tracks
     
     def draw_bbox(self, frame: np.ndarray, tracks: List, 
@@ -149,7 +128,7 @@ class DronePeopleDetector:
         return False
     
     def release(self):
-        if self.cap is not None:
+        if hasattr(self, 'cap') and self.cap is not None:
             self.cap.release()
             logger.info("Video capture released")
     

@@ -57,7 +57,7 @@ class Camera:
             raise ValueError("hfov necessario para dcm")
         
         try:
-            from new.monocular_vision_submodule import MonocularVision
+            from drone_people_detector.core.monocular_vision_submodule import MonocularVision
             return MonocularVision.monocular_vision_detection_method_2(
                 self, real_height_m, detected_bbox
             )

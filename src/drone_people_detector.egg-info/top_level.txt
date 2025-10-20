@@ -1,4 +1,1 @@
 drone_people_detector
-inputs
-models
-new

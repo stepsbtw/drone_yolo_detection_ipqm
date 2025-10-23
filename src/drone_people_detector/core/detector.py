@@ -57,62 +57,66 @@ class Detector:
         self.current_video_tracks = []
         self.frame_count = 0
     
-    def process_frame_with_tracking(self, frame, camera=None):
-        """processa frame com tracking de pessoas e armas"""
-        self.frame_count += 1
-        
-        # detecta pessoas
-        results = self.model(frame, conf=self.confidence_threshold, verbose=False)
-        
-        detections = []
-        weapon_detections = []
-        weapon_bboxes = []
-        distances = []
-        
-        position_data_list = []
-        
-        for result in results:
-            for detection in result.boxes:
-                bbox = detection.xyxy[0].cpu().numpy()
-                x1, y1, x2, y2 = bbox
-                w, h = x2 - x1, y2 - y1
-                
-                person_bbox = [x1, y1, w, h]
-                detections.append(person_bbox)
-                
-                person_crop = frame[int(y1):int(y2), int(x1):int(x2)]
-                
-                has_weapon = False
-                weapon_conf = 0.0
-                weapon_bbox_list = []
-                
-                if self.enable_weapon_detection and person_crop.size > 0:
-                    offset = (int(x1), int(y1)) if self.show_weapon_bbox else None
-                    _, detections_info, _ = self.weapon_detector.detect_weapons(person_crop, offset)
-                    has_weapon = len(detections_info) > 0
-                    if has_weapon:
-                        weapon_conf = detections_info[0]['confidence']
-                        if self.show_weapon_bbox:
-                            weapon_bbox_list = [det['bbox'] for det in detections_info]
-                
-                weapon_detections.append((has_weapon, weapon_conf))
-                weapon_bboxes.append(weapon_bbox_list)
-                
-                distance = None
-                position_data = None
-                if camera and h > 0:
-                    # Estimate distance using monocular vision method
-                    # Assuming average person height of 1.7m
-                    AVERAGE_PERSON_HEIGHT_M = 1.7
-                    detected_bbox = [x1, y1, w, h]  # [x, y, width, height]
-                    
-                    # Use monocular_vision_detection_method_2 for complete position estimation
-                    # Returns: (x_utm, y_utm, lat, lon, bearing, distance)
+def process_frame_with_tracking(self, frame, camera=None):
+    """Processa frame com tracking de pessoas e detecção de armas"""
+    self.frame_count += 1
+
+    # Detecta COISAS com o YOLO
+    results = self.model(frame, conf=self.confidence_threshold, verbose=False)
+
+    detections = []
+    weapon_detections = []
+    weapon_bboxes = []
+    distances = []
+    position_data_list = []
+
+    for result in results:
+        for detection in result.boxes:
+            class_id = int(detection.cls)
+            class_name = self.model.names[class_id]
+
+            # => FILTRAR APENAS PESSOAS <=
+            if class_name.lower() != "person":
+                continue
+
+            bbox = detection.xyxy[0].cpu().numpy()
+            x1, y1, x2, y2 = bbox
+            w, h = x2 - x1, y2 - y1
+            person_bbox = [x1, y1, w, h]
+            detections.append(person_bbox)
+
+            # Recorte da pessoa detectada
+            person_crop = frame[int(y1):int(y2), int(x1):int(x2)]
+
+            has_weapon = False
+            weapon_conf = 0.0
+            weapon_bbox_list = []
+
+            # Executa detecção de armas apenas dentro do recorte da pessoa
+            if self.enable_weapon_detection and person_crop.size > 0:
+                offset = (int(x1), int(y1)) if self.show_weapon_bbox else None
+                _, detections_info, _ = self.weapon_detector.detect_weapons(person_crop, offset)
+                has_weapon = len(detections_info) > 0
+                if has_weapon:
+                    weapon_conf = detections_info[0]['confidence']
+                    if self.show_weapon_bbox:
+                        weapon_bbox_list = [det['bbox'] for det in detections_info]
+
+            weapon_detections.append((has_weapon, weapon_conf))
+            weapon_bboxes.append(weapon_bbox_list)
+
+            # Estima distância (opcional)
+            distance = None
+            position_data = None
+            if camera and h > 0:
+                AVERAGE_PERSON_HEIGHT_M = 1.7
+                detected_bbox = [x1, y1, w, h]
+
+                try:
                     x_utm, y_utm, lat, lon, bearing, distance = MonocularVision.monocular_vision_detection_method_2(
                         camera, AVERAGE_PERSON_HEIGHT_M, detected_bbox
                     )
-                    
-                    # Store position data
+
                     position_data = {
                         'x_utm': x_utm,
                         'y_utm': y_utm,
@@ -120,30 +124,35 @@ class Detector:
                         'lon': lon,
                         'bearing': bearing
                     }
-                
-                distances.append(distance)
-                position_data_list.append(position_data)
-        
-        if self.enable_tracking:
-            tracks = self.track_manager.update(
-                detections, 
-                weapon_detections, 
-                distances,
-                weapon_bboxes if self.show_weapon_bbox else None,
-                position_data_list
-            )
-        else:
-            tracks = []
-            for i, det in enumerate(detections):
-                track = PersonTrack(track_id=f"T{i}")
-                has_weapon, weapon_conf = weapon_detections[i]
-                w_bboxes = weapon_bboxes[i] if self.show_weapon_bbox else []
-                pos_data = position_data_list[i] if i < len(position_data_list) else None
-                track.update(det, has_weapon, weapon_conf, distances[i], w_bboxes, pos_data)
-                tracks.append(track)
-        
-        annotated_frame = self._annotate_frame(frame.copy(), tracks)
-        return annotated_frame, tracks
+                except Exception as e:
+                    print(f"[WARN] Erro ao estimar distância: {e}")
+
+            distances.append(distance)
+            position_data_list.append(position_data)
+
+    # Atualiza tracking
+    if self.enable_tracking:
+        tracks = self.track_manager.update(
+            detections,
+            weapon_detections,
+            distances,
+            weapon_bboxes if self.show_weapon_bbox else None,
+            position_data_list
+        )
+    else:
+        tracks = []
+        for i, det in enumerate(detections):
+            track = PersonTrack(track_id=f"T{i}")
+            has_weapon, weapon_conf = weapon_detections[i]
+            w_bboxes = weapon_bboxes[i] if self.show_weapon_bbox else []
+            pos_data = position_data_list[i] if i < len(position_data_list) else None
+            track.update(det, has_weapon, weapon_conf, distances[i], w_bboxes, pos_data)
+            tracks.append(track)
+
+    # Desenha anotações
+    annotated_frame = self._annotate_frame(frame.copy(), tracks)
+
+    return annotated_frame, tracks
     
     def _annotate_frame(self, frame, tracks):
         """desenha annotations no frame"""

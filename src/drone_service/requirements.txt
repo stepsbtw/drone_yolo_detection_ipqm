@@ -9,6 +9,11 @@ pyproj>=3.0.0
 requests>=2.28.0
 urllib3>=1.26.0
 injector>=0.20.0
+dotenv
+imutils
+flask
+flask-cors
+flask-restx
 
 # The drone_people_detector library (will be installed from wheel)
 # drone_people_detector>=1.0.0

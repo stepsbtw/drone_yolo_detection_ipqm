@@ -127,7 +127,7 @@ def wait_for_keyframe(drone_detector, timeout=10):
             return True
         if time.time() - start_time > timeout:
             return False
-        time.sleep(0.01)
+        time.sleep(0.1)
 
 
 if __name__ == "__main__":

@@ -76,6 +76,8 @@ class Detector:
                 class_name = self.model.names[class_id]
 
                 # => FILTRAR APENAS PESSOAS <=
+                if class_name != 'person':
+                    continue
 
                 bbox = detection.xyxy[0].cpu().numpy()
                 x1, y1, x2, y2 = bbox
@@ -148,9 +150,9 @@ class Detector:
                 tracks.append(track)
 
         # Desenha anotações
-        annotated_frame = self._annotate_frame(frame.copy(), tracks)
+        #annotated_frame = self._annotate_frame(frame.copy(), tracks)
 
-        return annotated_frame, tracks
+        return frame, tracks
     
     def _annotate_frame(self, frame, tracks):
         """desenha annotations no frame"""

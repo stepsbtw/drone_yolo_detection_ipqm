@@ -11,6 +11,7 @@ import numpy as np
 from typing import Any, Tuple, Optional, List, Dict
 from dotenv import load_dotenv
 
+import base64
 from drone_people_detector.core.detector import Detector
 from drone_people_detector.core.camera import Camera
 from drone_people_detector.core.viewer import _draw_bbox, add_frame_info
@@ -62,6 +63,28 @@ class DronePeopleDetector:
     def get_camera(self) -> Camera:
         """retorna instancia da camera"""
         return self.camera
+    
+    def get_classification(self, frame: str) -> Tuple[Optional[np.ndarray], Optional[List[Dict]]]:
+        """
+        processa frame codificado em base64 e retorna frame processado + tracks
+        usado para processar frames recebidos via streaming
+        """
+        if frame is None:
+            return None, None
+
+        try:
+            # decodifica frame base64
+            bytes_data = base64.b64decode(frame.replace('data: ', ''))
+            np_array = np.frombuffer(bytes_data, np.uint8)
+            arr = cv2.imdecode(np_array, cv2.IMREAD_COLOR)
+            
+            # processa frame com tracking
+            annotated_frame, tracks = self.detector.process_frame_with_tracking(arr, self.camera)
+            return annotated_frame, tracks
+
+        except Exception:
+            logger.exception("Erro em get_classification")
+            return None, None
     
     def get_predict(self) -> Tuple[Optional[np.ndarray], Optional[List[Dict]]]:
         """

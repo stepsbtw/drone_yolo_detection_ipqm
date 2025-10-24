@@ -67,6 +67,10 @@ def draw_texts(source_image, values):
     """desenha textos usando PIL para melhor qualidade"""
     _load_fonts()
     
+    print(f"[DRAW_TEXTS] Drawing {len(values)} texts")
+    for i, (text, x, y, color, use_small_font) in enumerate(values):
+        print(f"  [{i}] '{text}' at ({x}, {y})")
+    
     image = cv2.cvtColor(source_image, cv2.COLOR_BGR2RGB)
     pil_image = Image.fromarray(image)
     
@@ -93,22 +97,92 @@ def _extract_track_data(track):
         bbox = [x, y, x + w, y + h]
         
         has_weapon = track.weapon_classifier.has_weapon() if hasattr(track, 'weapon_classifier') else False
+        weapon_track_active = False  # indica se temos weapon track ativo
+        
+        # obtem confianca correta baseado no modo de votacao
         weapon_conf = 0.0
         if has_weapon and hasattr(track, 'weapon_classifier'):
-            weapon_conf = track.weapon_classifier.categories['armed']['confidence']
+            if hasattr(track.weapon_classifier, 'use_temporal_voting') and not track.weapon_classifier.use_temporal_voting:
+                # modo sem votacao temporal - usa confianca atual
+                weapon_conf = track.weapon_classifier.current_confidence
+            else:
+                # modo com votacao temporal - usa confianca acumulada
+                weapon_conf = track.weapon_classifier.categories['armed']['confidence']
+        
+        # usa weapon_tracks com kalman filter se disponivel, senao usa weapon_bboxes raw
+        weapon_bboxes = []
+        max_weapon_conf = 0.0  # track da maior confianca dos weapon tracks
+        
+        if hasattr(track, 'weapon_tracks') and track.weapon_tracks:
+            # usa bboxes suavizados pelo kalman filter
+            for wt in track.weapon_tracks:
+                # inclui weapon bboxes apenas se track nao estiver perdido
+                if not wt.lost:
+                    weapon_bboxes.append({
+                        'bbox': wt.get_bbox('xyxy'),
+                        'confidence': wt.confidence,
+                        'class': wt.weapon_class,
+                        'smoothed': True
+                    })
+                
+                # mas considera a confianca MESMO se track estiver perdido
+                # (para manter exibicao do texto de confianca)
+                if wt.confidence > max_weapon_conf:
+                    max_weapon_conf = wt.confidence
+            
+            # se temos weapon tracks (mesmo perdidos) com confianca, mostra arma
+            if max_weapon_conf > 0:
+                has_weapon = True  # força exibição
+                weapon_conf = max_weapon_conf
+                weapon_track_active = True  # track ativo
+                
+        elif hasattr(track, 'weapon_bboxes') and track.weapon_bboxes:
+            # fallback para bboxes raw
+            for wb in track.weapon_bboxes:
+                if isinstance(wb, dict):
+                    weapon_bboxes.append({
+                        'bbox': wb.get('bbox', wb.get('bbox_crop', [])),
+                        'confidence': wb.get('confidence', 0.0),
+                        'class': wb.get('class', 'weapon'),
+                        'smoothed': False
+                    })
+                else:
+                    weapon_bboxes.append({
+                        'bbox': wb,
+                        'confidence': 0.0,
+                        'class': 'weapon',
+                        'smoothed': False
+                    })
+        
+        # NOVO: Se a pessoa foi classificada como armada antes, mas agora o track foi perdido,
+        # ainda mostra como armada com a ultima confianca conhecida (mas marca como "perdido")
+        weapon_lost = False
+        
+        # Logica simplificada: se mostramos a arma (has_weapon=True) mas nao ha deteccao ativa (active=0)
+        # entao o weapon track foi perdido e estamos apenas propagando a classificacao anterior
+        if has_weapon and hasattr(track, 'weapon_tracks'):
+            active_tracks = sum(1 for wt in track.weapon_tracks if wt.frames_since_update == 0)
+            total_tracks = len(track.weapon_tracks)
+            frames_info = [wt.frames_since_update for wt in track.weapon_tracks]
+            
+            # Se tem weapon tracks mas nenhum esta recebendo deteccao ativa neste frame
+            weapon_lost = (total_tracks > 0 and active_tracks == 0)
+            
+            print(f"[DEBUG] Track {track.id}: has_weapon={has_weapon}, tracks={total_tracks} (active={active_tracks}, frames={frames_info}), weapon_lost={weapon_lost}, conf={weapon_conf:.2f}")
         
         return {
             'track_id': track.id,
             'bbox': bbox,
             'has_weapon': has_weapon,
             'weapon_confidence': weapon_conf,
+            'weapon_lost': weapon_lost,  # indica se weapon track foi perdido
             'distance': track.distance if hasattr(track, 'distance') else None,
             'bearing': track.bearing if hasattr(track, 'bearing') else None,
             'lat': track.lat if hasattr(track, 'lat') else None,
             'lon': track.lon if hasattr(track, 'lon') else None,
             'x_utm': track.x_utm if hasattr(track, 'x_utm') else None,
             'y_utm': track.y_utm if hasattr(track, 'y_utm') else None,
-            'weapon_bboxes': track.weapon_bboxes if hasattr(track, 'weapon_bboxes') else [],
+            'weapon_bboxes': weapon_bboxes,
             'lost': track.lost
         }
     
@@ -123,6 +197,7 @@ def _extract_track_data(track):
             'bbox': bbox,
             'has_weapon': track.get('has_weapon', False),
             'weapon_confidence': track.get('weapon_confidence', 0.0),
+            'weapon_lost': track.get('weapon_lost', False),
             'distance': track.get('distance'),
             'bearing': track.get('bearing'),
             'lat': track.get('lat'),
@@ -140,13 +215,18 @@ def _draw_person_overlay(image, track_data):
     bbox = track_data['bbox']
     track_id = track_data['track_id']
     distance = track_data['distance']
-    bearing = track_data['bearing']
+    #bearing = track_data['bearing']
     lat = track_data['lat']
     lon = track_data['lon']
-    x_utm = track_data['x_utm']
-    y_utm = track_data['y_utm']
+    #x_utm = track_data['x_utm']
+    #y_utm = track_data['y_utm']
     has_weapon = track_data['has_weapon']
     weapon_conf = track_data['weapon_confidence']
+    weapon_lost = track_data.get('weapon_lost', False)
+    
+    # Debug
+    if has_weapon:
+        print(f"[DRAW DEBUG] Track {track_id}: has_weapon={has_weapon}, weapon_lost={weapon_lost}, conf={weapon_conf:.2f}")
     
     try:
         x1, y1, x2, y2 = map(int, bbox)
@@ -170,7 +250,7 @@ def _draw_person_overlay(image, track_data):
     # conta quantas linhas precisamos
     num_lines = 1  # titulo
     if distance is not None: num_lines += 1
-    if bearing is not None: num_lines += 1
+    #if bearing is not None: num_lines += 1
     if lat is not None and lon is not None: num_lines += 1
     if has_weapon: num_lines += 1
     
@@ -210,36 +290,57 @@ def _draw_person_overlay(image, track_data):
         line_y += font_size + 3
     
     # bearing (branco)
+    '''
     if bearing is not None:
         text_bearing = f"Bearing: {bearing:.1f}°"
         text_values.append([text_bearing, xmin + 10, line_y, color_text_body, False])
         line_y += font_size + 3
-    
+    '''
     # coordenadas geograficas (branco)
     if lat is not None and lon is not None:
         text_geo = f"Lat:{lat:.6f} Lon:{lon:.6f}"
         text_values.append([text_geo, xmin + 10, line_y, color_text_body, False])
         line_y += font_size + 3
     
-    # arma (vermelho claro se detectada)
+    # confianca da arma (vermelho claro se detectada)
     if has_weapon:
-        text_weapon = f"ARMA {int(weapon_conf*100)}%"
+        if weapon_lost:
+            # Track perdido - mostra com indicador de incerteza
+            text_weapon = f"Confidence: {int(weapon_conf*100)}% (?)"
+        else:
+            # Track ativo - confianca normal
+            text_weapon = f"Confidence: {int(weapon_conf*100)}%"
         text_values.append([text_weapon, xmin + 10, line_y, color_text_weapon, False])
+        print(f"[TEXT ADDED] {track_id}: '{text_weapon}' at y={line_y}, has_weapon={has_weapon}, weapon_lost={weapon_lost}")
         line_y += font_size + 3
     
     return image, text_values
 
 
 def _draw_weapon_bbox(image, weapon_bboxes):
-    """desenha bbox separada para armas"""
+    """desenha bbox vermelha para armas (sem texto)"""
     
-    for weapon_bbox in weapon_bboxes:
+    drawn_bboxes = []  # evita duplicatas
+    
+    for weapon_info in weapon_bboxes:
         try:
+            if isinstance(weapon_info, dict):
+                weapon_bbox = weapon_info.get('bbox', [])
+            else:
+                weapon_bbox = weapon_info
+            
             wx1, wy1, wx2, wy2 = map(int, weapon_bbox)
+            
+            # verifica se ja desenhamos essa bbox (evita duplicatas)
+            bbox_tuple = (wx1, wy1, wx2, wy2)
+            if bbox_tuple in drawn_bboxes:
+                continue
+            drawn_bboxes.append(bbox_tuple)
+            
         except (ValueError, TypeError, IndexError):
             continue
         
-        # bbox vermelha fina
+        # desenha bbox vermelha para arma (sempre vermelha, sem texto)
         image = cv2.rectangle(image, (wx1, wy1), (wx2, wy2), color_rect_weapon, 2)
     
     return image
@@ -262,6 +363,7 @@ def _draw_bbox(frame, tracks):
         # desenha overlay da pessoa
         image, person_texts = _draw_person_overlay(image, track_data)
         text_values.extend(person_texts)
+        print(f"[BBOX DEBUG] Track {track_data['track_id']}: {len(person_texts)} texts added, total now: {len(text_values)}")
         
         # desenha bbox de armas se disponivel
         if track_data['weapon_bboxes']:

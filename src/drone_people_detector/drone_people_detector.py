@@ -46,7 +46,8 @@ class DronePeopleDetector:
             enable_weapon_detection=getattr(config.detection, 'enable_weapon_detection', True),
             weapon_model_path=getattr(config.detection, 'model_path_weapons', 'models/weapons/yolov8guns.pt'),
             weapon_confidence_threshold=getattr(config.detection, 'weapon_confidence', 0.2),
-            show_weapon_bbox=getattr(config.detection, 'show_weapon_bbox', False)
+            show_weapon_bbox=getattr(config.detection, 'show_weapon_bbox', False),
+            use_temporal_voting=getattr(config.detection, 'use_temporal_voting', True)
         )
         
         # Video capture (if video path provided)

@@ -50,8 +50,6 @@ class MonocularVision:
         new_bearing = (camera_bearing + diff_degrees) % 360
         
         # calcula distancia usando focal length em pixels
-        # Distance = (real_height * focal_length_px) / pixel_height
-        # If real_height is in meters, result is in meters
         new_distance = (real_height * camera.focal_length_px) / pixel_height
         
         # converte para coordenadas utm e geograficas (se camera tiver posicao)

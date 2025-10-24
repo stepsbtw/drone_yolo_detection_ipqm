@@ -48,6 +48,7 @@ class DetectionConfig:
         self.enable_tracking = os.getenv('ENABLE_TRACKING', 'true').lower() == 'true'
         self.enable_weapon_detection = os.getenv('ENABLE_WEAPON_DETECTION', 'true').lower() == 'true'
         self.show_weapon_bbox = os.getenv('SHOW_WEAPON_BBOX', 'false').lower() == 'true'
+        self.use_temporal_voting = os.getenv('USE_TEMPORAL_VOTING', 'true').lower() == 'true'
         self.person_confidence = float(os.getenv('PERSON_CONFIDENCE', '0.5'))
         self.weapon_confidence = float(os.getenv('WEAPON_CONFIDENCE', '0.2'))
         self.model_path_people = os.getenv('MODEL_PEOPLE', 'models/people/yolo11n.pt')
